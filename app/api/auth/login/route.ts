@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/src/server/db';
-import { users } from '@/src/server/drizzle/schema';
+import { users, roles } from '@/src/server/drizzle/schema';
 import { eq } from 'drizzle-orm';
 import { comparePassword } from '@/src/server/auth/bcrypt';
 import { createSession } from '@/src/server/auth/session';
@@ -22,6 +22,19 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
   }
 
+  let roleName = 'employee';
+  if (user.roleId) {
+    const roleRows = await db
+      .select({ name: roles.name })
+      .from(roles)
+      .where(eq(roles.id, user.roleId))
+      .limit(1)
+      .execute();
+    if (roleRows.length > 0) {
+      roleName = roleRows[0].name;
+    }
+  }
+
   const { sessionId, expiresAt } = await createSession(user.id);
   const cookieOptions = {
     httpOnly: true,
@@ -31,7 +44,7 @@ export async function POST(request: Request) {
     secure: process.env.NODE_ENV === 'production',
   };
   const cookieHeader = (await import('cookie')).serialize('session_id', sessionId, cookieOptions);
-  const response = NextResponse.json({ success: true });
+  const response = NextResponse.json({ success: true, user: { id: user.id, role: roleName } });
   response.headers.set('Set-Cookie', cookieHeader);
   return response;
 }

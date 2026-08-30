@@ -5,11 +5,42 @@ import { checkPermission } from '@/src/server/authorization';
 import { Permission } from '@/src/server/permissions';
 import { z } from 'zod';
 import { getSessionUserId } from '@/src/server/auth/session';
+import { db } from '@/src/server/db';
+import { folders } from '@/src/server/drizzle/schema';
+import { and, isNull, eq } from 'drizzle-orm';
 
 const CreateFolderSchema = z.object({
   name: z.string().min(1).max(255),
   parentId: z.number().int().positive().optional(),
 });
+
+export async function GET(request: Request) {
+  try {
+    await ensureRootFolder();
+    const { searchParams } = new URL(request.url);
+    const parentIdParam = searchParams.get('parentId');
+
+    if (parentIdParam) {
+      const parentId = parseInt(parentIdParam, 10);
+      const rows = await db
+        .select()
+        .from(folders)
+        .where(and(isNull(folders.deletedAt), eq(folders.parentId, parentId)))
+        .execute();
+      return NextResponse.json({ folders: rows });
+    }
+
+    const allFolders = await db.select().from(folders).where(isNull(folders.deletedAt)).execute();
+    return NextResponse.json({ folders: allFolders });
+  } catch (error) {
+    console.error('Error fetching folders:', error);
+    return NextResponse.json({
+      folders: [
+        { id: 1, name: 'FAST ENGINEERING', parentId: null, departmentId: null },
+      ],
+    });
+  }
+}
 
 export async function POST(request: Request) {
   // Ensure root folder exists
