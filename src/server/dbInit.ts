@@ -92,11 +92,17 @@ CREATE TABLE IF NOT EXISTS "audit_logs" (
 `;
 
 export async function ensureDatabaseTables() {
-  if (initialized || !process.env.DATABASE_URL) return;
+  if (initialized) return;
+  const raw = process.env.DATABASE_URL?.trim();
+  if (!raw) {
+    throw new Error('DATABASE_URL environment variable is missing on Vercel.');
+  }
+
   try {
     await pool.query(initialSchemaSql);
     initialized = true;
   } catch (error) {
     console.error('Error auto-initializing database tables:', error);
+    throw error;
   }
 }
