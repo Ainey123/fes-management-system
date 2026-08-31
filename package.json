@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "echo \"No tests yet\"",
+    "test": "tsx --test tests/admin-user-management.test.ts",
     "drizzle:generate": "drizzle-kit generate:pg",
     "drizzle:migrate": "drizzle-kit migrate"
   },
@@ -36,7 +36,9 @@
     "drizzle-kit": "^0.20.0",
     "eslint": "^9",
     "eslint-config-next": "16.3.3",
+    "pg-mem": "^3.0.14",
     "tailwindcss": "^4",
+    "tsx": "^4.23.13",
     "typescript": "^5"
   }
 }

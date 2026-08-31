@@ -16,7 +16,14 @@ export async function POST(request: Request) {
     }
 
     const userRows = await db
-      .select({ id: users.id, passwordHash: users.passwordHash, roleId: users.roleId })
+      .select({
+        id: users.id,
+        passwordHash: users.passwordHash,
+        roleId: users.roleId,
+        status: users.status,
+        deletedAt: users.deletedAt,
+        name: users.name,
+      })
       .from(users)
       .where(eq(users.email, email))
       .limit(1)
@@ -27,10 +34,29 @@ export async function POST(request: Request) {
     }
 
     const user = userRows[0];
+
+    if (user.deletedAt || user.status === 'DELETED') {
+      return NextResponse.json({ error: 'Invalid credentials or user not found' }, { status: 401 });
+    }
+
+    if (user.status === 'DISABLED') {
+      return NextResponse.json(
+        { error: 'Account disabled. Please contact your administrator.' },
+        { status: 403 }
+      );
+    }
+
     const valid = await comparePassword(password, user.passwordHash);
     if (!valid) {
       return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
     }
+
+    // Record last login timestamp
+    await db
+      .update(users)
+      .set({ lastLoginAt: new Date(), updatedAt: new Date() })
+      .where(eq(users.id, user.id))
+      .execute();
 
     let roleName = 'employee';
     if (user.roleId) {

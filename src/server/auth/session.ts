@@ -1,6 +1,6 @@
 import { db } from '../db';
 import { sessions, users } from '../drizzle/schema';
-import { eq } from 'drizzle-orm';
+import { and, eq, ne } from 'drizzle-orm';
 import { randomUUID } from 'crypto';
 
 /** Create a new session for a given user id. Returns session id and expiration */
@@ -24,13 +24,24 @@ export async function getSession(sessionId: string) {
   if (new Date(s.expiresAt) < new Date()) return null; // expired
 
   const userRows = await db
-    .select({ id: users.id, email: users.email, name: users.name, roleId: users.roleId })
+    .select({
+      id: users.id,
+      email: users.email,
+      name: users.name,
+      roleId: users.roleId,
+      status: users.status,
+      deletedAt: users.deletedAt,
+      departmentId: users.departmentId,
+    })
     .from(users)
     .where(eq(users.id, s.userId as string))
     .limit(1)
     .execute();
   if (userRows.length === 0) return null;
-  return { session: s, user: userRows[0] };
+  const u = userRows[0];
+  if (u.deletedAt || u.status === 'DISABLED') return null;
+
+  return { session: s, user: u };
 }
 
 /** Extract authenticated user id from request cookie */
@@ -44,8 +55,31 @@ export async function getSessionUserId(request: Request) {
   return { userId: session.user.id };
 }
 
-/** Delete a session */
+/** Extract full session and user from request cookie */
+export async function getSessionData(request: Request) {
+  const cookieHeader = request.headers.get('cookie') ?? '';
+  const parsed = (await import('cookie')).parse(cookieHeader);
+  const sessionId = parsed['session_id'];
+  if (!sessionId) return null;
+  const data = await getSession(sessionId);
+  if (!data) return null;
+  return { sessionId, ...data };
+}
+
+/** Delete a single session */
 export async function deleteSession(sessionId: string) {
   await db.delete(sessions).where(eq(sessions.id, sessionId)).execute();
+}
+
+/** Delete all sessions for a user, optionally preserving one */
+export async function deleteUserSessions(userId: string, exceptSessionId?: string) {
+  if (exceptSessionId) {
+    await db
+      .delete(sessions)
+      .where(and(eq(sessions.userId, userId), ne(sessions.id, exceptSessionId)))
+      .execute();
+  } else {
+    await db.delete(sessions).where(eq(sessions.userId, userId)).execute();
+  }
 }
 

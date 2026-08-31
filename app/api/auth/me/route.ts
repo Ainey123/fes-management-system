@@ -38,6 +38,8 @@ export async function GET(request: Request) {
       email: sessionData.user.email,
       name: sessionData.user.name,
       role: roleName,
+      status: sessionData.user.status,
+      departmentId: sessionData.user.departmentId,
     },
   });
 }

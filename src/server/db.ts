@@ -8,9 +8,11 @@ const connectionString = rawUrl ? rawUrl.replace(/^["']|["']$/g, '') : undefined
 
 const isLocal = !connectionString || connectionString.includes('localhost') || connectionString.includes('127.0.0.1');
 
-export const pool = new Pool({
-  connectionString,
-  ssl: isLocal ? false : { rejectUnauthorized: false },
-});
+export const pool: Pool =
+  (global as unknown as { __TEST_POOL__?: Pool }).__TEST_POOL__ ||
+  new Pool({
+    connectionString,
+    ssl: isLocal ? false : { rejectUnauthorized: false },
+  });
 
 export const db = drizzle(pool, { schema });
