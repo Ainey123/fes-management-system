@@ -12,6 +12,7 @@ import { and, isNull, eq } from 'drizzle-orm';
 const CreateFolderSchema = z.object({
   name: z.string().min(1).max(255),
   parentId: z.number().int().positive().optional(),
+  departmentId: z.number().int().positive().optional(),
 });
 
 export async function GET(request: Request) {
@@ -63,10 +64,10 @@ export async function POST(request: Request) {
   if (!parse.success) {
     return NextResponse.json({ error: 'Invalid payload', details: parse.error.errors }, { status: 400 });
   }
-  const { name, parentId } = parse.data;
+  const { name, parentId, departmentId } = parse.data;
 
   try {
-    const folderId = await createFolder(name, parentId, userId);
+    const folderId = await createFolder(name, parentId, userId, departmentId);
     return NextResponse.json({ folderId }, { status: 201 });
   } catch (e) {
     console.error('Error creating folder', e);

@@ -2,6 +2,8 @@ import { db } from './db';
 import { users, roles, userDepartmentAccess, permissions } from './drizzle/schema';
 import { and, eq } from 'drizzle-orm';
 import { Permission } from './permissions';
+import { getSessionData } from './auth/session';
+import { NextResponse } from 'next/server';
 
 /**
  * Check if a user has a specific permission. For SUPER_ADMIN role, all permissions are granted.
@@ -60,10 +62,7 @@ export async function checkPermission(userId: string, permission: Permission, de
   return accessRows.length > 0;
 }
 
-import { getSessionData } from './auth/session';
-import { NextResponse } from 'next/server';
-
-export interface AuthenticatedAdmin {
+export interface AuthenticatedUser {
   sessionId: string;
   user: {
     id: string;
@@ -76,13 +75,14 @@ export interface AuthenticatedAdmin {
   role: string;
 }
 
+export type AuthenticatedAdmin = AuthenticatedUser;
+
 /**
- * Validates that the request has an active session for a SUPER_ADMIN.
- * Returns { user, session, role } if valid, or a NextResponse (401/403) to return immediately.
+ * Validates that the request has an active session for any valid authenticated user.
  */
-export async function requireSuperAdmin(
+export async function requireAuthUser(
   request: Request
-): Promise<{ errorResponse?: NextResponse; auth?: AuthenticatedAdmin }> {
+): Promise<{ errorResponse?: NextResponse; auth?: AuthenticatedUser }> {
   const sessionData = await getSessionData(request);
   if (!sessionData) {
     return {
@@ -94,30 +94,15 @@ export async function requireSuperAdmin(
   }
 
   const { user, sessionId } = sessionData;
-  if (!user.roleId) {
-    return {
-      errorResponse: NextResponse.json(
-        { error: 'Forbidden. Super Admin privileges required.' },
-        { status: 403 }
-      ),
-    };
-  }
-
-  const roleRows = await db
-    .select({ name: roles.name })
-    .from(roles)
-    .where(eq(roles.id, user.roleId))
-    .limit(1)
-    .execute();
-
-  const roleName = roleRows[0]?.name;
-  if (roleName !== 'super_admin') {
-    return {
-      errorResponse: NextResponse.json(
-        { error: 'Forbidden. Super Admin privileges required.' },
-        { status: 403 }
-      ),
-    };
+  let roleName = 'employee';
+  if (user.roleId) {
+    const roleRows = await db
+      .select({ name: roles.name })
+      .from(roles)
+      .where(eq(roles.id, user.roleId))
+      .limit(1)
+      .execute();
+    if (roleRows.length > 0) roleName = roleRows[0].name;
   }
 
   return {
@@ -127,4 +112,27 @@ export async function requireSuperAdmin(
       role: roleName,
     },
   };
+}
+
+/**
+ * Validates that the request has an active session for a SUPER_ADMIN.
+ * Returns { user, session, role } if valid, or a NextResponse (401/403) to return immediately.
+ */
+export async function requireSuperAdmin(
+  request: Request
+): Promise<{ errorResponse?: NextResponse; auth?: AuthenticatedAdmin }> {
+  const authRes = await requireAuthUser(request);
+  if (authRes.errorResponse) return authRes;
+  const auth = authRes.auth!;
+
+  if (auth.role !== 'super_admin') {
+    return {
+      errorResponse: NextResponse.json(
+        { error: 'Forbidden. Super Admin privileges required.' },
+        { status: 403 }
+      ),
+    };
+  }
+
+  return { auth };
 }

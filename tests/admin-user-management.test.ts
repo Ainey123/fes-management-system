@@ -24,6 +24,13 @@ import {
 import { GET as getAdminMeHandler } from '../app/api/admin/me/route';
 import { POST as changePasswordHandler } from '../app/api/admin/change-password/route';
 import { GET as getAuditLogsHandler } from '../app/api/admin/audit-logs/route';
+import { GET as getDepartmentsHandler } from '../app/api/departments/route';
+import { GET as getExplorerHandler } from '../app/api/departments/[id]/explorer/route';
+import { POST as createFolderHandler } from '../app/api/folders/route';
+import { PATCH as updateFolderHandler, DELETE as deleteFolderHandler } from '../app/api/folders/[id]/route';
+import { POST as uploadFileHandler } from '../app/api/files/upload/route';
+import { GET as downloadFileHandler } from '../app/api/files/[id]/download/route';
+import { PATCH as updateFileHandler, DELETE as deleteFileHandler } from '../app/api/files/[id]/route';
 
 let adminCookie = '';
 let adminUserId = '';
@@ -658,3 +665,208 @@ test('17. Soft delete employee terminates user and sessions', async () => {
   const loginRes = await loginHandler(loginReq);
   assert.equal(loginRes.status, 401, 'Deleted employee login must be rejected');
 });
+
+let createdFolderId = 0;
+let createdFileId = 0;
+
+test('18. Departments API returns real departments and calculated statistics', async () => {
+  const res = await getDepartmentsHandler();
+  assert.equal(res.status, 200);
+  const data = await res.json();
+  assert.ok(Array.isArray(data.departments), 'Departments array returned');
+  assert.equal(data.departments.length, 7, 'All 7 standard departments returned');
+
+  const engineering = data.departments.find((d: { name: string }) => d.name === 'Engineering Department');
+  assert.ok(engineering, 'Engineering Department exists');
+  assert.ok(typeof engineering.foldersCount === 'number', 'foldersCount is number');
+  assert.ok(typeof engineering.filesCount === 'number', 'filesCount is number');
+  assert.ok(typeof engineering.storageBytes === 'number', 'storageBytes is number');
+  assert.ok(typeof engineering.employeesCount === 'number', 'employeesCount is number');
+});
+
+test('19. Super Admin can open Department Explorer with breadcrumbs and root folder', async () => {
+  const req = new Request(`http://localhost:3000/api/departments/${engineeringDeptId}/explorer`, {
+    method: 'GET',
+    headers: { Cookie: adminCookie },
+  });
+
+  const res = await getExplorerHandler(req, {
+    params: Promise.resolve({ id: String(engineeringDeptId) }),
+  });
+
+  assert.equal(res.status, 200);
+  const data = await res.json();
+  assert.equal(data.department.name, 'Engineering Department');
+  assert.ok(data.currentFolder, 'Current folder returned');
+  assert.ok(Array.isArray(data.breadcrumbs), 'Breadcrumbs array returned');
+  assert.equal(data.breadcrumbs[0].name, 'FAST ENGINEERING', 'Root breadcrumb is FAST ENGINEERING');
+  assert.ok(Array.isArray(data.folders), 'Folders list returned');
+  assert.ok(Array.isArray(data.files), 'Files list returned');
+  assert.ok(data.statistics, 'Statistics object returned');
+});
+
+test('20. Super Admin can create a folder inside a department', async () => {
+  // First get department root folder id
+  const explorerReq = new Request(`http://localhost:3000/api/departments/${engineeringDeptId}/explorer`, {
+    method: 'GET',
+    headers: { Cookie: adminCookie },
+  });
+  const explorerRes = await getExplorerHandler(explorerReq, {
+    params: Promise.resolve({ id: String(engineeringDeptId) }),
+  });
+  const explorerData = await explorerRes.json();
+  const rootFolderId = explorerData.currentFolder.id;
+
+  const req = new Request('http://localhost:3000/api/folders', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Cookie: adminCookie,
+    },
+    body: JSON.stringify({
+      name: 'Engineering Projects 2026',
+      parentId: rootFolderId,
+      departmentId: engineeringDeptId,
+    }),
+  });
+
+  const res = await createFolderHandler(req);
+  assert.equal(res.status, 201);
+  const data = await res.json();
+  assert.ok(data.folderId, 'Folder ID returned');
+  createdFolderId = data.folderId;
+});
+
+test('21. Super Admin can upload a document into a department folder', async () => {
+  const formData = new FormData();
+  formData.append(
+    'file',
+    new Blob(['Sample technical design document content'], { type: 'application/pdf' }),
+    'Design-Plan.pdf'
+  );
+  formData.append('folderId', String(createdFolderId));
+
+  const req = new Request('http://localhost:3000/api/files/upload', {
+    method: 'POST',
+    headers: { Cookie: adminCookie },
+    body: formData,
+  });
+
+  const res = await uploadFileHandler(req);
+  assert.equal(res.status, 201);
+  const data = await res.json();
+  assert.equal(data.success, true);
+  assert.equal(data.file.originalName, 'Design-Plan.pdf');
+  createdFileId = data.file.id;
+});
+
+test('22. Super Admin can download the uploaded document', async () => {
+  const req = new Request(`http://localhost:3000/api/files/${createdFileId}/download`, {
+    method: 'GET',
+    headers: { Cookie: adminCookie },
+  });
+
+  const res = await downloadFileHandler(req, {
+    params: Promise.resolve({ id: String(createdFileId) }),
+  });
+
+  assert.equal(res.status, 200);
+  assert.ok(res.headers.get('content-disposition')?.includes('Design-Plan.pdf'));
+});
+
+test('23. Super Admin can rename and soft delete the document', async () => {
+  // Rename
+  const renameReq = new Request(`http://localhost:3000/api/files/${createdFileId}`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      Cookie: adminCookie,
+    },
+    body: JSON.stringify({
+      originalName: 'Renamed-Design-Plan.pdf',
+    }),
+  });
+
+  const renameRes = await updateFileHandler(renameReq, {
+    params: Promise.resolve({ id: String(createdFileId) }),
+  });
+  assert.equal(renameRes.status, 200);
+
+  // Soft delete
+  const deleteReq = new Request(`http://localhost:3000/api/files/${createdFileId}`, {
+    method: 'DELETE',
+    headers: { Cookie: adminCookie },
+  });
+
+  const deleteRes = await deleteFileHandler(deleteReq, {
+    params: Promise.resolve({ id: String(createdFileId) }),
+  });
+  assert.equal(deleteRes.status, 200);
+});
+
+test('24. Department Isolation: Accounts Department does NOT show Engineering folders/files', async () => {
+  const req = new Request(`http://localhost:3000/api/departments/${accountsDeptId}/explorer`, {
+    method: 'GET',
+    headers: { Cookie: adminCookie },
+  });
+
+  const res = await getExplorerHandler(req, {
+    params: Promise.resolve({ id: String(accountsDeptId) }),
+  });
+
+  assert.equal(res.status, 200);
+  const data = await res.json();
+  assert.equal(data.department.name, 'Accounts Department');
+
+  const folderNames = data.folders.map((f: { name: string }) => f.name);
+  assert.ok(!folderNames.includes('Engineering Projects 2026'), 'Accounts must NOT contain Engineering folders');
+});
+
+test('25. Department Security: Employee cannot access unauthorized department (403)', async () => {
+  // Create a non-admin employee in department 1
+  const createEmpReq = new Request('http://localhost:3000/api/admin/users', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Cookie: adminCookie,
+    },
+    body: JSON.stringify({
+      name: 'Department Restricted Staff',
+      email: 'restricted@fastengineering.com',
+      departmentId: engineeringDeptId,
+      role: 'employee',
+      password: 'RestrictedPass2026!',
+      permissions: ['VIEW'],
+    }),
+  });
+
+  const createEmpRes = await createUserHandler(createEmpReq);
+  assert.equal(createEmpRes.status, 201);
+
+  // Log in as this employee
+  const loginReq = new Request('http://localhost:3000/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email: 'restricted@fastengineering.com',
+      password: 'RestrictedPass2026!',
+    }),
+  });
+
+  const loginRes = await loginHandler(loginReq);
+  assert.equal(loginRes.status, 200);
+  const empCookie = loginRes.headers.get('set-cookie') || '';
+
+  // Attempt to access Accounts Department (dept 2)
+  const unauthorizedReq = new Request(`http://localhost:3000/api/departments/${accountsDeptId}/explorer`, {
+    method: 'GET',
+    headers: { Cookie: empCookie },
+  });
+
+  const unauthorizedRes = await getExplorerHandler(unauthorizedReq, {
+    params: Promise.resolve({ id: String(accountsDeptId) }),
+  });
+
+  assert.equal(unauthorizedRes.status, 403, 'Employee must be rejected with 403 Forbidden on other departments');
+});
+

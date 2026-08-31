@@ -7,6 +7,10 @@ import Link from 'next/link';
 interface Department {
   id: number;
   name: string;
+  foldersCount?: number;
+  filesCount?: number;
+  storageBytes?: number;
+  employeesCount?: number;
 }
 
 interface Folder {
@@ -63,6 +67,81 @@ interface AdminProfile {
   status: string;
   createdAt: string;
   lastLoginAt: string | null;
+}
+
+interface ExplorerFile {
+  id: number;
+  originalName: string;
+  mimeType: string;
+  size: number;
+  folderId: number | null;
+  uploadedAt: string;
+  uploaderName: string;
+  uploaderEmail: string;
+}
+
+interface ExplorerFolder {
+  id: number;
+  name: string;
+  createdAt: string;
+}
+
+interface ExplorerData {
+  department: {
+    id: number;
+    name: string;
+  };
+  currentFolder: {
+    id: number;
+    name: string;
+    parentId: number | null;
+    isRoot: boolean;
+  };
+  breadcrumbs: Array<{ id: number | null; name: string }>;
+  folders: ExplorerFolder[];
+  files: ExplorerFile[];
+  statistics: {
+    foldersCount: number;
+    filesCount: number;
+    storageBytes: number;
+    employeesCount: number;
+  };
+  employees: Array<{
+    id: string;
+    name: string;
+    email: string;
+    status: string;
+    createdAt: string;
+    lastLoginAt: string | null;
+  }>;
+  activity: Array<{
+    id: number;
+    action: string;
+    entity: string;
+    entityId: string | null;
+    details: Record<string, unknown> | null;
+    createdAt: string;
+  }>;
+}
+
+function formatBytes(bytes: number, decimals = 1): string {
+  if (!bytes || bytes === 0) return '0 B';
+  const k = 1024;
+  const dm = decimals < 0 ? 0 : decimals;
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+}
+
+function getFileIcon(fileName: string): string {
+  const ext = fileName.split('.').pop()?.toLowerCase() || '';
+  if (['pdf'].includes(ext)) return '📕';
+  if (['doc', 'docx'].includes(ext)) return '📘';
+  if (['xls', 'xlsx', 'csv'].includes(ext)) return '📗';
+  if (['png', 'jpg', 'jpeg', 'webp', 'svg'].includes(ext)) return '🖼️';
+  if (['txt', 'md'].includes(ext)) return '📝';
+  if (['zip', 'rar', '7z'].includes(ext)) return '🗜️';
+  return '📄';
 }
 
 // Grouped Permissions for clear human-readable assignment
@@ -212,6 +291,41 @@ export default function AdminDashboardPage() {
   const [auditLogsList, setAuditLogsList] = useState<AuditLogItem[]>([]);
   const [auditLoading, setAuditLoading] = useState(false);
 
+  // =========================================================================
+  // DEPARTMENT EXPLORER STATE
+  // =========================================================================
+  const [selectedDeptId, setSelectedDeptId] = useState<number | null>(null);
+  const [explorerData, setExplorerData] = useState<ExplorerData | null>(null);
+  const [explorerLoading, setExplorerLoading] = useState(false);
+  const [explorerTab, setExplorerTab] = useState<'files' | 'employees' | 'activity'>('files');
+  const [explorerSearch, setExplorerSearch] = useState('');
+
+  // Explorer Modals State
+  const [showUploadModal, setShowUploadModal] = useState(false);
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadLoading, setUploadLoading] = useState(false);
+
+  const [showDeptFolderModal, setShowDeptFolderModal] = useState(false);
+  const [deptFolderName, setDeptFolderName] = useState('');
+  const [deptFolderLoading, setDeptFolderLoading] = useState(false);
+
+  const [renameTarget, setRenameTarget] = useState<{
+    type: 'folder' | 'file';
+    id: number;
+    name: string;
+  } | null>(null);
+  const [renameInput, setRenameInput] = useState('');
+  const [renameLoading, setRenameLoading] = useState(false);
+
+  const [previewTarget, setPreviewTarget] = useState<ExplorerFile | null>(null);
+
+  const [deleteTarget, setDeleteTarget] = useState<{
+    type: 'folder' | 'file';
+    id: number;
+    name: string;
+  } | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
+
   // Generate random strong password helper
   const generateStrongPasswordHelper = () => {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%^&*';
@@ -302,7 +416,33 @@ export default function AdminDashboardPage() {
     }
   }, []);
 
-  // Synchronize on mount and tab switches
+  // Load Department Explorer Data Function
+  const loadExplorerData = useCallback(
+    async (deptId: number, folderId?: number | null, search?: string) => {
+      setExplorerLoading(true);
+      try {
+        const params = new URLSearchParams();
+        if (folderId) params.set('folderId', String(folderId));
+        if (search?.trim()) params.set('search', search.trim());
+
+        const res = await fetch(`/api/departments/${deptId}/explorer?${params.toString()}`);
+        if (res.ok) {
+          const data: ExplorerData = await res.json();
+          setExplorerData(data);
+        } else {
+          const errData = await res.json();
+          setMessage({ type: 'error', text: errData.error || 'Failed to load department explorer' });
+        }
+      } catch (err) {
+        console.error('Error loading explorer:', err);
+      } finally {
+        setExplorerLoading(false);
+      }
+    },
+    []
+  );
+
+  // Synchronize on mount
   useEffect(() => {
     const init = async () => {
       await loadOverviewData();
@@ -313,6 +453,15 @@ export default function AdminDashboardPage() {
     init();
   }, [loadOverviewData, loadUsers, loadAdminProfile, loadAuditLogs]);
 
+  // Open Department Handler
+  const handleOpenDepartment = (deptId: number) => {
+    setSelectedDeptId(deptId);
+    setExplorerTab('files');
+    setExplorerSearch('');
+    setActiveTab('departments');
+    loadExplorerData(deptId);
+  };
+
   // Copy to clipboard helper
   const handleCopyPassword = async (pwd: string) => {
     try {
@@ -320,7 +469,6 @@ export default function AdminDashboardPage() {
       setCopiedNotification(true);
       setTimeout(() => setCopiedNotification(false), 3000);
     } catch {
-      // Fallback
       setMessage({ type: 'success', text: `Password copied to clipboard!` });
     }
   };
@@ -336,7 +484,7 @@ export default function AdminDashboardPage() {
     }
   };
 
-  // Create Folder Handler
+  // Global Create Folder Handler (Folders Tab)
   const handleCreateFolder = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newFolderName.trim()) return;
@@ -355,12 +503,139 @@ export default function AdminDashboardPage() {
 
       setNewFolderName('');
       setSelectedParentId(undefined);
-      setMessage({ type: 'success', text: `Folder "${data.folder.name}" created successfully.` });
+      setMessage({ type: 'success', text: `Folder "${newFolderName.trim()}" created successfully.` });
       await loadOverviewData();
     } catch (err: unknown) {
       setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Error creating folder' });
     } finally {
       setFolderLoading(false);
+    }
+  };
+
+  // Department Explorer: Create Subfolder in Active Folder
+  const handleCreateFolderInDept = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!deptFolderName.trim() || !selectedDeptId || !explorerData?.currentFolder) return;
+    setDeptFolderLoading(true);
+    try {
+      const res = await fetch('/api/folders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: deptFolderName.trim(),
+          parentId: explorerData.currentFolder.id,
+          departmentId: selectedDeptId,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to create folder');
+
+      setDeptFolderName('');
+      setShowDeptFolderModal(false);
+      setMessage({ type: 'success', text: `Folder created in ${explorerData.department.name}.` });
+      await loadExplorerData(selectedDeptId, explorerData.currentFolder.id);
+      await loadOverviewData();
+    } catch (err: unknown) {
+      setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Error creating folder' });
+    } finally {
+      setDeptFolderLoading(false);
+    }
+  };
+
+  // Department Explorer: Upload File
+  const handleUploadFile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!uploadFile || !selectedDeptId || !explorerData?.currentFolder) {
+      setMessage({ type: 'error', text: 'Please select a file to upload.' });
+      return;
+    }
+
+    setUploadLoading(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', uploadFile);
+      formData.append('folderId', String(explorerData.currentFolder.id));
+      formData.append('departmentId', String(selectedDeptId));
+
+      const res = await fetch('/api/files/upload', {
+        method: 'POST',
+        body: formData,
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to upload document');
+
+      setUploadFile(null);
+      setShowUploadModal(false);
+      setMessage({ type: 'success', text: `Document "${data.file.originalName}" uploaded successfully.` });
+      await loadExplorerData(selectedDeptId, explorerData.currentFolder.id);
+      await loadOverviewData();
+    } catch (err: unknown) {
+      setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Upload failed' });
+    } finally {
+      setUploadLoading(false);
+    }
+  };
+
+  // Department Explorer: Rename Folder or File
+  const handleExecuteRename = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!renameTarget || !renameInput.trim() || !selectedDeptId || !explorerData?.currentFolder) return;
+    setRenameLoading(true);
+    try {
+      const endpoint =
+        renameTarget.type === 'folder'
+          ? `/api/folders/${renameTarget.id}`
+          : `/api/files/${renameTarget.id}`;
+
+      const payload =
+        renameTarget.type === 'folder'
+          ? { name: renameInput.trim() }
+          : { originalName: renameInput.trim() };
+
+      const res = await fetch(endpoint, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Failed to rename ${renameTarget.type}`);
+
+      setMessage({ type: 'success', text: `${renameTarget.type === 'folder' ? 'Folder' : 'File'} renamed.` });
+      setRenameTarget(null);
+      setRenameInput('');
+      await loadExplorerData(selectedDeptId, explorerData.currentFolder.id);
+      await loadOverviewData();
+    } catch (err: unknown) {
+      setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Rename failed' });
+    } finally {
+      setRenameLoading(false);
+    }
+  };
+
+  // Department Explorer: Delete Folder or File (Move to Trash)
+  const handleExecuteDelete = async () => {
+    if (!deleteTarget || !selectedDeptId || !explorerData?.currentFolder) return;
+    setDeleteLoading(true);
+    try {
+      const endpoint =
+        deleteTarget.type === 'folder'
+          ? `/api/folders/${deleteTarget.id}`
+          : `/api/files/${deleteTarget.id}`;
+
+      const res = await fetch(endpoint, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Failed to delete ${deleteTarget.type}`);
+
+      setMessage({ type: 'success', text: `"${deleteTarget.name}" moved to Trash.` });
+      setDeleteTarget(null);
+      await loadExplorerData(selectedDeptId, explorerData.currentFolder.id);
+      await loadOverviewData();
+    } catch (err: unknown) {
+      setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Delete failed' });
+    } finally {
+      setDeleteLoading(false);
     }
   };
 
@@ -399,7 +674,6 @@ export default function AdminDashboardPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to create employee');
 
-      // Find department name for success screen
       const dept = departments.find((d) => d.id === Number(createForm.departmentId));
 
       setShowCreateModal(false);
@@ -411,7 +685,6 @@ export default function AdminDashboardPage() {
         temporaryPassword: data.temporaryPassword,
       });
 
-      // Reset form
       setCreateForm({
         name: '',
         email: '',
@@ -604,7 +877,6 @@ export default function AdminDashboardPage() {
     }
   };
 
-  // Filter normal employees vs super admin for counts
   const normalEmployees = usersList.filter((u) => u.role !== 'super_admin');
 
   return (
@@ -634,7 +906,10 @@ export default function AdminDashboardPage() {
           {/* Navigation Links */}
           <nav className="p-3 space-y-1">
             <button
-              onClick={() => setActiveTab('dashboard')}
+              onClick={() => {
+                setActiveTab('dashboard');
+                setSelectedDeptId(null);
+              }}
               className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition ${
                 activeTab === 'dashboard'
                   ? 'bg-blue-600 text-white font-semibold shadow-md shadow-blue-600/30'
@@ -648,7 +923,10 @@ export default function AdminDashboardPage() {
             </button>
 
             <button
-              onClick={() => setActiveTab('departments')}
+              onClick={() => {
+                setActiveTab('departments');
+                setSelectedDeptId(null);
+              }}
               className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition ${
                 activeTab === 'departments'
                   ? 'bg-blue-600 text-white font-semibold shadow-md shadow-blue-600/30'
@@ -664,7 +942,10 @@ export default function AdminDashboardPage() {
 
             {/* HIGH VISIBILITY EMPLOYEES TAB */}
             <button
-              onClick={() => setActiveTab('employees')}
+              onClick={() => {
+                setActiveTab('employees');
+                setSelectedDeptId(null);
+              }}
               className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition ${
                 activeTab === 'employees'
                   ? 'bg-blue-600 text-white font-semibold shadow-md shadow-blue-600/30'
@@ -681,7 +962,10 @@ export default function AdminDashboardPage() {
             </button>
 
             <button
-              onClick={() => setActiveTab('folders')}
+              onClick={() => {
+                setActiveTab('folders');
+                setSelectedDeptId(null);
+              }}
               className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition ${
                 activeTab === 'folders'
                   ? 'bg-blue-600 text-white font-semibold shadow-md shadow-blue-600/30'
@@ -695,7 +979,10 @@ export default function AdminDashboardPage() {
             </button>
 
             <button
-              onClick={() => setActiveTab('permissions')}
+              onClick={() => {
+                setActiveTab('permissions');
+                setSelectedDeptId(null);
+              }}
               className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition ${
                 activeTab === 'permissions'
                   ? 'bg-blue-600 text-white font-semibold shadow-md shadow-blue-600/30'
@@ -709,7 +996,10 @@ export default function AdminDashboardPage() {
             </button>
 
             <button
-              onClick={() => setActiveTab('audit')}
+              onClick={() => {
+                setActiveTab('audit');
+                setSelectedDeptId(null);
+              }}
               className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition ${
                 activeTab === 'audit'
                   ? 'bg-blue-600 text-white font-semibold shadow-md shadow-blue-600/30'
@@ -728,7 +1018,10 @@ export default function AdminDashboardPage() {
             </button>
 
             <button
-              onClick={() => setActiveTab('trash')}
+              onClick={() => {
+                setActiveTab('trash');
+                setSelectedDeptId(null);
+              }}
               className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition ${
                 activeTab === 'trash'
                   ? 'bg-blue-600 text-white font-semibold shadow-md shadow-blue-600/30'
@@ -742,7 +1035,10 @@ export default function AdminDashboardPage() {
             </button>
 
             <button
-              onClick={() => setActiveTab('settings')}
+              onClick={() => {
+                setActiveTab('settings');
+                setSelectedDeptId(null);
+              }}
               className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition ${
                 activeTab === 'settings'
                   ? 'bg-blue-600 text-white font-semibold shadow-md shadow-blue-600/30'
@@ -799,7 +1095,10 @@ export default function AdminDashboardPage() {
           <div>
             <h1 className="text-xl font-extrabold text-white tracking-tight flex items-center gap-2">
               {activeTab === 'dashboard' && 'Executive Dashboard'}
-              {activeTab === 'departments' && 'Corporate Departments'}
+              {activeTab === 'departments' &&
+                (selectedDeptId && explorerData
+                  ? `${explorerData.department.name} Explorer`
+                  : 'Corporate Departments')}
               {activeTab === 'employees' && 'Employee Management'}
               {activeTab === 'folders' && 'Folders & Documents'}
               {activeTab === 'permissions' && 'Permissions & Roles'}
@@ -813,7 +1112,20 @@ export default function AdminDashboardPage() {
           </div>
 
           <div className="flex items-center gap-3">
-            {/* OBVIOUS "+ CREATE EMPLOYEE" BUTTON IN TOP HEADER */}
+            {activeTab === 'departments' && selectedDeptId && (
+              <button
+                onClick={() => {
+                  setSelectedDeptId(null);
+                  setExplorerData(null);
+                  loadOverviewData();
+                }}
+                className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-xl border border-slate-700 transition flex items-center gap-1.5"
+              >
+                <span>&larr;</span>
+                <span>All Departments</span>
+              </button>
+            )}
+
             <button
               onClick={() => setShowCreateModal(true)}
               className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-xl shadow-lg shadow-blue-600/30 transition flex items-center gap-2"
@@ -891,7 +1203,7 @@ export default function AdminDashboardPage() {
           {/* ========================================================================= */}
           {activeTab === 'dashboard' && (
             <div className="space-y-8">
-              {/* 12. ADMIN DASHBOARD QUICK ACTIONS */}
+              {/* ADMIN DASHBOARD QUICK ACTIONS */}
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-sm">
                 <div className="mb-4">
                   <h2 className="text-base font-bold text-white tracking-tight">Quick Actions</h2>
@@ -909,7 +1221,10 @@ export default function AdminDashboardPage() {
                   </button>
 
                   <button
-                    onClick={() => setActiveTab('departments')}
+                    onClick={() => {
+                      setActiveTab('departments');
+                      setSelectedDeptId(null);
+                    }}
                     className="p-4 rounded-xl bg-slate-800/60 hover:bg-slate-800 border border-slate-700 text-left transition group"
                   >
                     <div className="text-2xl mb-2 group-hover:scale-110 transition-transform">🏢</div>
@@ -946,10 +1261,13 @@ export default function AdminDashboardPage() {
                 </div>
               </div>
 
-              {/* 13. CLICKABLE DASHBOARD STATISTICS */}
+              {/* CLICKABLE DASHBOARD STATISTICS */}
               <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
                 <div
-                  onClick={() => setActiveTab('departments')}
+                  onClick={() => {
+                    setActiveTab('departments');
+                    setSelectedDeptId(null);
+                  }}
                   className="bg-slate-900 border border-slate-800 hover:border-blue-500/50 rounded-2xl p-5 cursor-pointer transition group shadow-sm"
                 >
                   <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Departments</div>
@@ -1023,7 +1341,7 @@ export default function AdminDashboardPage() {
                 </div>
               </div>
 
-              {/* 14. VISUAL DEPARTMENT STRUCTURE */}
+              {/* VISUAL DEPARTMENT STRUCTURE */}
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-sm">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-6 pb-4 border-b border-slate-800">
                   <div>
@@ -1035,7 +1353,10 @@ export default function AdminDashboardPage() {
                     </p>
                   </div>
                   <button
-                    onClick={() => setActiveTab('departments')}
+                    onClick={() => {
+                      setActiveTab('departments');
+                      setSelectedDeptId(null);
+                    }}
                     className="mt-2 sm:mt-0 text-xs text-blue-400 hover:text-blue-300 font-semibold"
                   >
                     View All Department Records &rarr;
@@ -1048,10 +1369,7 @@ export default function AdminDashboardPage() {
                     return (
                       <div
                         key={dept.id || idx}
-                        onClick={() => {
-                          setDepartmentFilter(String(dept.id));
-                          setActiveTab('employees');
-                        }}
+                        onClick={() => handleOpenDepartment(dept.id)}
                         className="bg-slate-800/40 hover:bg-slate-800/80 border border-slate-700/50 hover:border-blue-500/40 rounded-xl p-4 cursor-pointer transition group"
                       >
                         <div className="flex items-center justify-between mb-2">
@@ -1068,7 +1386,7 @@ export default function AdminDashboardPage() {
                         <div className="mt-3 pt-2.5 border-t border-slate-700/40 flex justify-between items-center text-xs text-slate-400">
                           <span>{deptEmployees.length} Staff</span>
                           <span className="text-blue-400 text-[11px] font-medium group-hover:underline">
-                            View Staff &rarr;
+                            Open Department &rarr;
                           </span>
                         </div>
                       </div>
@@ -1113,7 +1431,551 @@ export default function AdminDashboardPage() {
           )}
 
           {/* ========================================================================= */}
-          {/* TAB: 2. EMPLOYEES PAGE (EMPLOYEE MANAGEMENT)                              */}
+          {/* TAB: DEPARTMENTS & DEPARTMENT EXPLORER                                    */}
+          {/* ========================================================================= */}
+          {activeTab === 'departments' && (
+            <div>
+              {!selectedDeptId ? (
+                /* 1. DEPARTMENTS GRID VIEW (CLICKABLE CARDS) */
+                <div className="space-y-6">
+                  <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div>
+                      <h2 className="text-lg font-bold text-white tracking-tight">Corporate Departments</h2>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        Select any department to explore its isolated folders, files, employees, and activity
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                    {departments.map((dept, idx) => {
+                      return (
+                        <div
+                          key={dept.id || idx}
+                          onClick={() => handleOpenDepartment(dept.id)}
+                          className="bg-slate-900 hover:bg-slate-850 border border-slate-800 hover:border-blue-500/50 rounded-2xl p-5 shadow-sm transition group cursor-pointer flex flex-col justify-between"
+                        >
+                          <div>
+                            <div className="flex items-center justify-between mb-3">
+                              <span className="w-8 h-8 rounded-lg bg-blue-500/10 text-blue-400 font-bold flex items-center justify-center text-sm">
+                                {idx + 1}
+                              </span>
+                              <span className="text-xs px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium">
+                                Operational
+                              </span>
+                            </div>
+
+                            <h3 className="font-bold text-white text-base group-hover:text-blue-400 transition">
+                              {dept.name}
+                            </h3>
+
+                            {/* Real Department Metrics */}
+                            <div className="grid grid-cols-2 gap-2 mt-4 pt-3 border-t border-slate-800/80 text-xs">
+                              <div className="p-2 bg-slate-950/60 rounded-lg border border-slate-800">
+                                <span className="text-slate-500 block text-[10px] uppercase font-semibold">Folders</span>
+                                <span className="text-white font-bold text-sm">{dept.foldersCount ?? 0}</span>
+                              </div>
+                              <div className="p-2 bg-slate-950/60 rounded-lg border border-slate-800">
+                                <span className="text-slate-500 block text-[10px] uppercase font-semibold">Files</span>
+                                <span className="text-white font-bold text-sm">{dept.filesCount ?? 0}</span>
+                              </div>
+                              <div className="p-2 bg-slate-950/60 rounded-lg border border-slate-800">
+                                <span className="text-slate-500 block text-[10px] uppercase font-semibold">Storage</span>
+                                <span className="text-white font-bold text-sm">{formatBytes(dept.storageBytes ?? 0)}</span>
+                              </div>
+                              <div className="p-2 bg-slate-950/60 rounded-lg border border-slate-800">
+                                <span className="text-slate-500 block text-[10px] uppercase font-semibold">Employees</span>
+                                <span className="text-white font-bold text-sm">{dept.employeesCount ?? 0}</span>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* PROMINENT OPEN DEPARTMENT BUTTON */}
+                          <div className="mt-5 pt-3 border-t border-slate-800/60">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleOpenDepartment(dept.id);
+                              }}
+                              className="w-full py-2.5 bg-blue-600/10 hover:bg-blue-600 text-blue-400 hover:text-white border border-blue-500/30 hover:border-transparent font-bold text-xs rounded-xl transition flex items-center justify-center gap-2 group-hover:bg-blue-600 group-hover:text-white"
+                            >
+                              <span>Open Department</span>
+                              <span>&rarr;</span>
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : (
+                /* 2. DEDICATED DEPARTMENT DETAIL & FILE EXPLORER VIEW */
+                <div className="space-y-6">
+                  {/* Top Navigation & Breadcrumbs */}
+                  <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-sm space-y-4">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                      <div>
+                        <button
+                          onClick={() => {
+                            setSelectedDeptId(null);
+                            setExplorerData(null);
+                            loadOverviewData();
+                          }}
+                          className="text-xs text-blue-400 hover:text-blue-300 font-semibold mb-2 inline-flex items-center gap-1"
+                        >
+                          <span>&larr;</span>
+                          <span>Back to Departments</span>
+                        </button>
+                        <h2 className="text-xl font-extrabold text-white tracking-tight">
+                          {explorerData?.department.name || 'Department Explorer'}
+                        </h2>
+                      </div>
+
+                      {/* Top Action Buttons */}
+                      <div className="flex items-center gap-2.5">
+                        <button
+                          onClick={() => setShowDeptFolderModal(true)}
+                          className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded-xl border border-slate-700 transition flex items-center gap-1.5"
+                        >
+                          <span>📁</span>
+                          <span>+ New Folder</span>
+                        </button>
+                        <button
+                          onClick={() => setShowUploadModal(true)}
+                          className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-xl shadow-md shadow-blue-600/30 transition flex items-center gap-1.5"
+                        >
+                          <span>⬆️</span>
+                          <span>+ Upload File</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Interactive Breadcrumbs */}
+                    <div className="p-3 bg-slate-950 rounded-xl border border-slate-800/80 flex items-center gap-2 text-xs overflow-x-auto">
+                      <span className="text-slate-500">Path:</span>
+                      {explorerData?.breadcrumbs.map((crumb, idx) => {
+                        const isLast = idx === (explorerData.breadcrumbs.length - 1);
+                        return (
+                          <div key={idx} className="flex items-center gap-2 whitespace-nowrap">
+                            {idx > 0 && <span className="text-slate-600">/</span>}
+                            <button
+                              disabled={isLast}
+                              onClick={() => {
+                                if (crumb.id === null) {
+                                  // Clicked FAST ENGINEERING root -> open department root
+                                  loadExplorerData(selectedDeptId);
+                                } else {
+                                  loadExplorerData(selectedDeptId, crumb.id);
+                                }
+                              }}
+                              className={`font-medium transition ${
+                                isLast
+                                  ? 'text-white font-bold cursor-default'
+                                  : 'text-blue-400 hover:text-blue-300 hover:underline'
+                              }`}
+                            >
+                              {crumb.name}
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Department Summary Metrics */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2">
+                      <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800">
+                        <span className="text-slate-500 block text-[10px] uppercase font-semibold">Folders</span>
+                        <span className="text-white font-bold text-base">
+                          {explorerData?.statistics.foldersCount ?? 0}
+                        </span>
+                      </div>
+                      <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800">
+                        <span className="text-slate-500 block text-[10px] uppercase font-semibold">Files</span>
+                        <span className="text-white font-bold text-base">
+                          {explorerData?.statistics.filesCount ?? 0}
+                        </span>
+                      </div>
+                      <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800">
+                        <span className="text-slate-500 block text-[10px] uppercase font-semibold">Storage Used</span>
+                        <span className="text-white font-bold text-base">
+                          {formatBytes(explorerData?.statistics.storageBytes ?? 0)}
+                        </span>
+                      </div>
+                      <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800">
+                        <span className="text-slate-500 block text-[10px] uppercase font-semibold">Employees</span>
+                        <span className="text-white font-bold text-base">
+                          {explorerData?.statistics.employeesCount ?? 0}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Explorer Sub-Tabs: [Files & Folders] [Employees] [Activity] */}
+                  <div className="flex border-b border-slate-800 gap-2">
+                    <button
+                      onClick={() => setExplorerTab('files')}
+                      className={`px-4 py-2.5 text-xs font-bold border-b-2 transition ${
+                        explorerTab === 'files'
+                          ? 'border-blue-500 text-blue-400'
+                          : 'border-transparent text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      📁 Files & Folders
+                    </button>
+                    <button
+                      onClick={() => setExplorerTab('employees')}
+                      className={`px-4 py-2.5 text-xs font-bold border-b-2 transition ${
+                        explorerTab === 'employees'
+                          ? 'border-blue-500 text-blue-400'
+                          : 'border-transparent text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      👥 Employees ({explorerData?.employees.length ?? 0})
+                    </button>
+                    <button
+                      onClick={() => setExplorerTab('activity')}
+                      className={`px-4 py-2.5 text-xs font-bold border-b-2 transition ${
+                        explorerTab === 'activity'
+                          ? 'border-blue-500 text-blue-400'
+                          : 'border-transparent text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      📋 Activity ({explorerData?.activity.length ?? 0})
+                    </button>
+                  </div>
+
+                  {/* TAB 1: FILES & FOLDERS EXPLORER */}
+                  {explorerTab === 'files' && (
+                    <div className="space-y-4">
+                      {/* Search in department */}
+                      <div className="flex items-center gap-3">
+                        <div className="relative flex-1 max-w-md">
+                          <input
+                            type="text"
+                            value={explorerSearch}
+                            onChange={(e) => {
+                              setExplorerSearch(e.target.value);
+                              loadExplorerData(selectedDeptId, explorerData?.currentFolder.id, e.target.value);
+                            }}
+                            placeholder={`Search inside ${explorerData?.department.name || 'department'}...`}
+                            className="w-full px-3.5 py-2 rounded-xl bg-slate-900 border border-slate-800 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 text-xs"
+                          />
+                        </div>
+                        {explorerSearch && (
+                          <button
+                            onClick={() => {
+                              setExplorerSearch('');
+                              loadExplorerData(selectedDeptId, explorerData?.currentFolder.id);
+                            }}
+                            className="text-xs text-slate-400 hover:text-white"
+                          >
+                            Clear
+                          </button>
+                        )}
+                      </div>
+
+                      {explorerLoading ? (
+                        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center text-slate-400 text-xs">
+                          Loading department contents...
+                        </div>
+                      ) : explorerData &&
+                        explorerData.folders.length === 0 &&
+                        explorerData.files.length === 0 ? (
+                        /* 15. EMPTY DEPARTMENT / FOLDER STATE */
+                        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center shadow-sm">
+                          <div className="w-16 h-16 rounded-2xl bg-blue-500/10 text-blue-400 border border-blue-500/20 text-3xl flex items-center justify-center mx-auto mb-4">
+                            📄
+                          </div>
+                          <h3 className="text-base font-bold text-white">No documents yet</h3>
+                          <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
+                            This department does not contain any documents or folders in this directory.
+                          </p>
+                          <div className="mt-6 flex items-center justify-center gap-3">
+                            <button
+                              onClick={() => setShowDeptFolderModal(true)}
+                              className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold rounded-xl border border-slate-700 transition"
+                            >
+                              + Create Folder
+                            </button>
+                            <button
+                              onClick={() => setShowUploadModal(true)}
+                              className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-xl shadow transition"
+                            >
+                              + Upload File
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="space-y-5">
+                          {/* FOLDERS GRID */}
+                          {explorerData && explorerData.folders.length > 0 && (
+                            <div>
+                              <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2.5">
+                                Folders ({explorerData.folders.length})
+                              </div>
+                              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                                {explorerData.folders.map((f) => (
+                                  <div
+                                    key={f.id}
+                                    className="p-3.5 bg-slate-900 hover:bg-slate-850 border border-slate-800 hover:border-slate-700 rounded-xl flex items-center justify-between transition group"
+                                  >
+                                    <div
+                                      onClick={() => loadExplorerData(selectedDeptId, f.id)}
+                                      className="flex items-center gap-3 cursor-pointer flex-1 min-w-0"
+                                    >
+                                      <span className="text-2xl shrink-0">📁</span>
+                                      <div className="min-w-0">
+                                        <div className="font-semibold text-white text-xs truncate group-hover:text-blue-400 transition">
+                                          {f.name}
+                                        </div>
+                                        <div className="text-[10px] text-slate-500">
+                                          Created: {new Date(f.createdAt).toLocaleDateString()}
+                                        </div>
+                                      </div>
+                                    </div>
+
+                                    {/* Folder Action Buttons */}
+                                    <div className="flex items-center gap-1 shrink-0 ml-2">
+                                      <button
+                                        onClick={() => loadExplorerData(selectedDeptId, f.id)}
+                                        className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-semibold rounded-lg"
+                                      >
+                                        Open
+                                      </button>
+                                      <button
+                                        onClick={() => {
+                                          setRenameTarget({ type: 'folder', id: f.id, name: f.name });
+                                          setRenameInput(f.name);
+                                        }}
+                                        className="px-1.5 py-1 text-slate-400 hover:text-white text-xs"
+                                        title="Rename Folder"
+                                      >
+                                        ✏️
+                                      </button>
+                                      <button
+                                        onClick={() =>
+                                          setDeleteTarget({ type: 'folder', id: f.id, name: f.name })
+                                        }
+                                        className="px-1.5 py-1 text-slate-400 hover:text-red-400 text-xs"
+                                        title="Delete Folder"
+                                      >
+                                        🗑️
+                                      </button>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* FILES TABLE */}
+                          {explorerData && explorerData.files.length > 0 && (
+                            <div>
+                              <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2.5">
+                                Files ({explorerData.files.length})
+                              </div>
+                              <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-sm">
+                                <div className="overflow-x-auto">
+                                  <table className="w-full text-left text-xs text-slate-300">
+                                    <thead className="bg-slate-950 text-slate-400 uppercase font-semibold text-[11px] border-b border-slate-800">
+                                      <tr>
+                                        <th className="px-5 py-3.5">File Name</th>
+                                        <th className="px-5 py-3.5">Size</th>
+                                        <th className="px-5 py-3.5">Uploaded By</th>
+                                        <th className="px-5 py-3.5">Upload Date</th>
+                                        <th className="px-5 py-3.5 text-right">Actions</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-800/80">
+                                      {explorerData.files.map((file) => (
+                                        <tr key={file.id} className="hover:bg-slate-800/40 transition">
+                                          {/* Name */}
+                                          <td className="px-5 py-3.5">
+                                            <div className="flex items-center gap-2.5">
+                                              <span className="text-lg">{getFileIcon(file.originalName)}</span>
+                                              <div>
+                                                <span className="font-semibold text-white block">
+                                                  {file.originalName}
+                                                </span>
+                                                <span className="text-[10px] text-slate-500 font-mono">
+                                                  {file.mimeType}
+                                                </span>
+                                              </div>
+                                            </div>
+                                          </td>
+
+                                          {/* Size */}
+                                          <td className="px-5 py-3.5 font-mono text-slate-300">
+                                            {formatBytes(file.size)}
+                                          </td>
+
+                                          {/* Uploaded By */}
+                                          <td className="px-5 py-3.5">
+                                            <span className="text-slate-300 font-medium">{file.uploaderName}</span>
+                                            {file.uploaderEmail && (
+                                              <span className="block text-[10px] text-slate-500 font-mono">
+                                                {file.uploaderEmail}
+                                              </span>
+                                            )}
+                                          </td>
+
+                                          {/* Upload Date */}
+                                          <td className="px-5 py-3.5 text-slate-400">
+                                            {new Date(file.uploadedAt).toLocaleString()}
+                                          </td>
+
+                                          {/* Actions */}
+                                          <td className="px-5 py-3.5 text-right">
+                                            <div className="flex items-center justify-end gap-1.5">
+                                              <a
+                                                href={`/api/files/${file.id}/download`}
+                                                download
+                                                className="px-2.5 py-1 bg-blue-600/10 hover:bg-blue-600/20 text-blue-400 border border-blue-500/30 text-xs font-semibold rounded-lg transition"
+                                              >
+                                                Download
+                                              </a>
+                                              <button
+                                                onClick={() => setPreviewTarget(file)}
+                                                className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg transition"
+                                              >
+                                                Preview
+                                              </button>
+                                              <button
+                                                onClick={() => {
+                                                  setRenameTarget({
+                                                    type: 'file',
+                                                    id: file.id,
+                                                    name: file.originalName,
+                                                  });
+                                                  setRenameInput(file.originalName);
+                                                }}
+                                                className="px-2 py-1 text-slate-400 hover:text-white text-xs"
+                                                title="Rename File"
+                                              >
+                                                ✏️
+                                              </button>
+                                              <button
+                                                onClick={() =>
+                                                  setDeleteTarget({
+                                                    type: 'file',
+                                                    id: file.id,
+                                                    name: file.originalName,
+                                                  })
+                                                }
+                                                className="px-2 py-1 text-slate-400 hover:text-red-400 text-xs"
+                                                title="Delete File"
+                                              >
+                                                🗑️
+                                              </button>
+                                            </div>
+                                          </td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* TAB 2: DEPARTMENT EMPLOYEES */}
+                  {explorerTab === 'employees' && (
+                    <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-sm">
+                      {explorerData && explorerData.employees.length === 0 ? (
+                        <div className="p-8 text-center text-slate-400 text-xs">
+                          No employees currently assigned to this department.
+                        </div>
+                      ) : (
+                        <table className="w-full text-left text-xs text-slate-300">
+                          <thead className="bg-slate-950 text-slate-400 uppercase font-semibold text-[11px] border-b border-slate-800">
+                            <tr>
+                              <th className="px-5 py-3.5">Employee</th>
+                              <th className="px-5 py-3.5">Email</th>
+                              <th className="px-5 py-3.5">Status</th>
+                              <th className="px-5 py-3.5">Member Since</th>
+                              <th className="px-5 py-3.5">Last Login</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-800/80">
+                            {explorerData?.employees.map((emp) => (
+                              <tr key={emp.id} className="hover:bg-slate-800/40 transition">
+                                <td className="px-5 py-3.5 font-semibold text-white">{emp.name}</td>
+                                <td className="px-5 py-3.5 font-mono text-slate-300">{emp.email}</td>
+                                <td className="px-5 py-3.5">
+                                  <span
+                                    className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                      emp.status === 'ACTIVE'
+                                        ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                                        : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                                    }`}
+                                  >
+                                    {emp.status}
+                                  </span>
+                                </td>
+                                <td className="px-5 py-3.5 text-slate-400">
+                                  {new Date(emp.createdAt).toLocaleDateString()}
+                                </td>
+                                <td className="px-5 py-3.5 text-slate-400">
+                                  {emp.lastLoginAt ? new Date(emp.lastLoginAt).toLocaleString() : 'Never'}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                    </div>
+                  )}
+
+                  {/* TAB 3: DEPARTMENT ACTIVITY */}
+                  {explorerTab === 'activity' && (
+                    <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-sm">
+                      {explorerData && explorerData.activity.length === 0 ? (
+                        <div className="p-8 text-center text-slate-400 text-xs">
+                          No recorded activity in this department yet.
+                        </div>
+                      ) : (
+                        <table className="w-full text-left text-xs text-slate-300">
+                          <thead className="bg-slate-950 text-slate-400 uppercase font-semibold text-[11px] border-b border-slate-800">
+                            <tr>
+                              <th className="px-5 py-3.5">Timestamp</th>
+                              <th className="px-5 py-3.5">Action</th>
+                              <th className="px-5 py-3.5">Entity</th>
+                              <th className="px-5 py-3.5">Details</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-800/80">
+                            {explorerData?.activity.map((act) => (
+                              <tr key={act.id} className="hover:bg-slate-800/40 transition">
+                                <td className="px-5 py-3.5 font-mono text-slate-400">
+                                  {new Date(act.createdAt).toLocaleString()}
+                                </td>
+                                <td className="px-5 py-3.5">
+                                  <span className="px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20 font-mono text-[11px]">
+                                    {act.action}
+                                  </span>
+                                </td>
+                                <td className="px-5 py-3.5 text-slate-300">{act.entity}</td>
+                                <td className="px-5 py-3.5 font-mono text-[11px] text-slate-400 max-w-xs truncate">
+                                  {act.details ? JSON.stringify(act.details) : '—'}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ========================================================================= */}
+          {/* TAB: EMPLOYEES PAGE (EMPLOYEE MANAGEMENT)                                 */}
           {/* ========================================================================= */}
           {activeTab === 'employees' && (
             <div className="space-y-6">
@@ -1193,7 +2055,7 @@ export default function AdminDashboardPage() {
                 </div>
               </div>
 
-              {/* 11. EMPTY STATE IF ZERO NORMAL EMPLOYEES */}
+              {/* EMPTY STATE IF ZERO NORMAL EMPLOYEES */}
               {normalEmployees.length === 0 && !usersLoading ? (
                 <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center shadow-sm">
                   <div className="w-16 h-16 rounded-2xl bg-blue-500/10 text-blue-400 border border-blue-500/20 text-3xl flex items-center justify-center mx-auto mb-4">
@@ -1379,58 +2241,6 @@ export default function AdminDashboardPage() {
                   </div>
                 </div>
               )}
-            </div>
-          )}
-
-          {/* ========================================================================= */}
-          {/* TAB: DEPARTMENTS                                                          */}
-          {/* ========================================================================= */}
-          {activeTab === 'departments' && (
-            <div className="space-y-6">
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-sm">
-                <h2 className="text-base font-bold text-white">Fast Engineering Divisions</h2>
-                <p className="text-xs text-slate-400 mt-1">
-                  The 7 core operational departments with strict document isolation
-                </p>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {departments.map((dept, idx) => {
-                  const deptUsers = usersList.filter((u) => u.departmentId === dept.id);
-                  return (
-                    <div key={dept.id || idx} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-sm">
-                      <div className="flex items-center justify-between mb-3">
-                        <span className="w-8 h-8 rounded-lg bg-blue-500/10 text-blue-400 font-bold flex items-center justify-center text-sm">
-                          {idx + 1}
-                        </span>
-                        <span className="text-xs px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium">
-                          Operational
-                        </span>
-                      </div>
-                      <h3 className="font-bold text-white text-base">{dept.name}</h3>
-                      <p className="text-xs text-slate-400 mt-1">Personnel assigned: {deptUsers.length} employees</p>
-
-                      <div className="mt-4 pt-3 border-t border-slate-800 flex justify-between items-center text-xs">
-                        <button
-                          onClick={() => {
-                            setDepartmentFilter(String(dept.id));
-                            setActiveTab('employees');
-                          }}
-                          className="text-blue-400 hover:text-blue-300 font-semibold"
-                        >
-                          View Employees &rarr;
-                        </button>
-                        <button
-                          onClick={() => setActiveTab('folders')}
-                          className="text-slate-400 hover:text-slate-200"
-                        >
-                          Browse Files
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
             </div>
           )}
 
@@ -1655,7 +2465,7 @@ export default function AdminDashboardPage() {
           )}
 
           {/* ========================================================================= */}
-          {/* TAB: 10. SUPER ADMIN SETTINGS & ACCOUNT                                   */}
+          {/* TAB: SUPER ADMIN SETTINGS & ACCOUNT                                       */}
           {/* ========================================================================= */}
           {activeTab === 'settings' && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -1832,7 +2642,6 @@ export default function AdminDashboardPage() {
       {showCreateModal && (
         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl animate-in fade-in">
-            {/* Header */}
             <div className="p-6 border-b border-slate-800 flex justify-between items-center">
               <div>
                 <h3 className="text-lg font-bold text-white">Create New Employee</h3>
@@ -1846,9 +2655,7 @@ export default function AdminDashboardPage() {
               </button>
             </div>
 
-            {/* Modal Body Form */}
             <form onSubmit={handleCreateUser} className="p-6 space-y-6 overflow-y-auto flex-1">
-              {/* Section 1: Personal Information */}
               <div className="space-y-3">
                 <h4 className="text-xs font-bold uppercase tracking-wider text-blue-400 flex items-center gap-2">
                   <span>👤</span> Personal Information
@@ -1879,7 +2686,6 @@ export default function AdminDashboardPage() {
                 </div>
               </div>
 
-              {/* Section 2: Department Assignment */}
               <div className="space-y-3 pt-4 border-t border-slate-800">
                 <h4 className="text-xs font-bold uppercase tracking-wider text-blue-400 flex items-center gap-2">
                   <span>🏢</span> Department Assignment
@@ -1900,7 +2706,6 @@ export default function AdminDashboardPage() {
                 </div>
               </div>
 
-              {/* Section 3: Role Assignment */}
               <div className="space-y-3 pt-4 border-t border-slate-800">
                 <h4 className="text-xs font-bold uppercase tracking-wider text-blue-400 flex items-center gap-2">
                   <span>🛡️</span> Role Assignment
@@ -1923,7 +2728,6 @@ export default function AdminDashboardPage() {
                 </div>
               </div>
 
-              {/* Section 4: Permissions */}
               <div className="space-y-3 pt-4 border-t border-slate-800">
                 <div className="flex items-center justify-between">
                   <h4 className="text-xs font-bold uppercase tracking-wider text-blue-400 flex items-center gap-2">
@@ -1995,7 +2799,6 @@ export default function AdminDashboardPage() {
                 </div>
               </div>
 
-              {/* Section 5: Login Credentials */}
               <div className="space-y-3 pt-4 border-t border-slate-800">
                 <h4 className="text-xs font-bold uppercase tracking-wider text-blue-400 flex items-center gap-2">
                   <span>🔑</span> Login Credentials
@@ -2070,7 +2873,6 @@ export default function AdminDashboardPage() {
                 </div>
               </div>
 
-              {/* Submit / Cancel Footer */}
               <div className="pt-4 border-t border-slate-800 flex items-center justify-end gap-3">
                 <button
                   type="button"
@@ -2093,7 +2895,7 @@ export default function AdminDashboardPage() {
       )}
 
       {/* ========================================================================= */}
-      {/* 7. AFTER EMPLOYEE CREATION SUCCESS SCREEN MODAL                           */}
+      {/* AFTER EMPLOYEE CREATION SUCCESS SCREEN MODAL                              */}
       {/* ========================================================================= */}
       {createdSuccessResult && (
         <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
@@ -2125,7 +2927,6 @@ export default function AdminDashboardPage() {
               </div>
             </div>
 
-            {/* TEMPORARY PASSWORD DISPLAY CARD */}
             <div className="p-4 bg-slate-950 border border-amber-500/40 rounded-xl mb-4">
               <span className="text-[10px] uppercase font-bold text-amber-400 block mb-1">
                 Temporary Password
@@ -2166,7 +2967,7 @@ export default function AdminDashboardPage() {
       )}
 
       {/* ========================================================================= */}
-      {/* 8. EMPLOYEE DETAILS MODAL                                                 */}
+      {/* EMPLOYEE DETAILS MODAL                                                    */}
       {/* ========================================================================= */}
       {showViewModal && (
         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
@@ -2182,7 +2983,6 @@ export default function AdminDashboardPage() {
             </div>
 
             <div className="py-4 space-y-4 text-xs">
-              {/* Account Card */}
               <div className="p-4 bg-slate-950 rounded-xl border border-slate-800 space-y-2">
                 <div className="text-[10px] uppercase font-bold text-blue-400">Account</div>
                 <div className="flex justify-between">
@@ -2215,7 +3015,6 @@ export default function AdminDashboardPage() {
                 </div>
               </div>
 
-              {/* Organization Card */}
               <div className="p-4 bg-slate-950 rounded-xl border border-slate-800 space-y-2">
                 <div className="text-[10px] uppercase font-bold text-blue-400">Organization</div>
                 <div className="flex justify-between">
@@ -2228,7 +3027,6 @@ export default function AdminDashboardPage() {
                 </div>
               </div>
 
-              {/* Permissions Card */}
               <div className="p-4 bg-slate-950 rounded-xl border border-slate-800 space-y-2">
                 <div className="text-[10px] uppercase font-bold text-blue-400">Assigned Permissions</div>
                 <div className="flex flex-wrap gap-1.5 pt-1">
@@ -2247,7 +3045,6 @@ export default function AdminDashboardPage() {
                 </div>
               </div>
 
-              {/* Account Security Card */}
               <div className="p-4 bg-slate-950 rounded-xl border border-slate-800 space-y-2">
                 <div className="text-[10px] uppercase font-bold text-blue-400">Account Security</div>
                 <div className="grid grid-cols-2 gap-2 pt-1">
@@ -2311,7 +3108,7 @@ export default function AdminDashboardPage() {
       )}
 
       {/* ========================================================================= */}
-      {/* 9. RESET EMPLOYEE PASSWORD MODAL                                          */}
+      {/* RESET EMPLOYEE PASSWORD MODAL                                             */}
       {/* ========================================================================= */}
       {showResetModal && (
         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
@@ -2332,7 +3129,6 @@ export default function AdminDashboardPage() {
             </div>
 
             <form onSubmit={handleResetPassword} className="space-y-4">
-              {/* Option Selector */}
               <div className="space-y-2">
                 <label
                   onClick={() => setResetMode('auto')}
@@ -2629,6 +3425,282 @@ export default function AdminDashboardPage() {
                 className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-xl shadow"
               >
                 {permLoading ? 'Saving...' : 'Save Permissions'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* DEPARTMENT EXPLORER: CREATE SUBFOLDER MODAL                              */}
+      {/* ========================================================================= */}
+      {showDeptFolderModal && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md p-6 shadow-2xl animate-in zoom-in-95">
+            <div className="flex justify-between items-center pb-4 border-b border-slate-800 mb-4">
+              <div>
+                <h3 className="text-base font-bold text-white">Create New Folder</h3>
+                <p className="text-xs text-slate-400">
+                  Inside: {explorerData?.currentFolder.name || explorerData?.department.name}
+                </p>
+              </div>
+              <button
+                onClick={() => setShowDeptFolderModal(false)}
+                className="text-slate-400 hover:text-white text-base font-bold px-2 py-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateFolderInDept} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 uppercase mb-1">
+                  Folder Name
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={deptFolderName}
+                  onChange={(e) => setDeptFolderName(e.target.value)}
+                  placeholder="e.g. Project Specifications"
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500 text-xs"
+                />
+              </div>
+
+              <div className="pt-3 border-t border-slate-800 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowDeptFolderModal(false)}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={deptFolderLoading}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-bold rounded-xl shadow"
+                >
+                  {deptFolderLoading ? 'Creating...' : '+ Create Folder'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* DEPARTMENT EXPLORER: UPLOAD FILE MODAL                                   */}
+      {/* ========================================================================= */}
+      {showUploadModal && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md p-6 shadow-2xl animate-in zoom-in-95">
+            <div className="flex justify-between items-center pb-4 border-b border-slate-800 mb-4">
+              <div>
+                <h3 className="text-base font-bold text-white">Upload Document</h3>
+                <p className="text-xs text-slate-400">
+                  Target: {explorerData?.currentFolder.name || explorerData?.department.name}
+                </p>
+              </div>
+              <button
+                onClick={() => setShowUploadModal(false)}
+                className="text-slate-400 hover:text-white text-base font-bold px-2 py-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleUploadFile} className="space-y-4">
+              <div className="border-2 border-dashed border-slate-700 rounded-xl p-6 text-center bg-slate-950">
+                <span className="text-3xl block mb-2">📤</span>
+                <p className="text-xs text-white font-semibold mb-1">Choose a file to upload</p>
+                <p className="text-[11px] text-slate-400 mb-4">
+                  Supported formats: PDF, DOCX, XLSX, CSV, TXT, PNG, JPG (Max 50MB)
+                </p>
+                <input
+                  type="file"
+                  required
+                  onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
+                  className="block w-full text-xs text-slate-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-500 cursor-pointer"
+                />
+              </div>
+
+              {uploadFile && (
+                <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 text-xs flex justify-between items-center">
+                  <div className="truncate font-semibold text-white">{uploadFile.name}</div>
+                  <div className="font-mono text-slate-400 text-[11px] shrink-0 ml-2">
+                    {formatBytes(uploadFile.size)}
+                  </div>
+                </div>
+              )}
+
+              <div className="pt-3 border-t border-slate-800 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowUploadModal(false)}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={uploadLoading || !uploadFile}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-bold rounded-xl shadow"
+                >
+                  {uploadLoading ? 'Uploading...' : 'Start Upload'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* DEPARTMENT EXPLORER: RENAME MODAL                                        */}
+      {/* ========================================================================= */}
+      {renameTarget && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md p-6 shadow-2xl animate-in zoom-in-95">
+            <div className="flex justify-between items-center pb-4 border-b border-slate-800 mb-4">
+              <h3 className="text-base font-bold text-white">
+                Rename {renameTarget.type === 'folder' ? 'Folder' : 'File'}
+              </h3>
+              <button
+                onClick={() => setRenameTarget(null)}
+                className="text-slate-400 hover:text-white text-base font-bold px-2 py-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleExecuteRename} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 uppercase mb-1">
+                  New Name
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={renameInput}
+                  onChange={(e) => setRenameInput(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              <div className="pt-3 border-t border-slate-800 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setRenameTarget(null)}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={renameLoading}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-bold rounded-xl shadow"
+                >
+                  {renameLoading ? 'Saving...' : 'Rename'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* DEPARTMENT EXPLORER: PREVIEW FILE MODAL                                  */}
+      {/* ========================================================================= */}
+      {previewTarget && (
+        <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg p-6 shadow-2xl animate-in zoom-in-95">
+            <div className="flex justify-between items-center pb-4 border-b border-slate-800 mb-4">
+              <div className="flex items-center gap-2">
+                <span className="text-xl">{getFileIcon(previewTarget.originalName)}</span>
+                <h3 className="text-base font-bold text-white truncate max-w-xs">
+                  {previewTarget.originalName}
+                </h3>
+              </div>
+              <button
+                onClick={() => setPreviewTarget(null)}
+                className="text-slate-400 hover:text-white text-base font-bold px-2 py-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="bg-slate-950 rounded-xl p-4 border border-slate-800 space-y-2.5 text-xs mb-6">
+              <div className="flex justify-between py-1 border-b border-slate-800/80">
+                <span className="text-slate-400">File Name:</span>
+                <span className="font-semibold text-white">{previewTarget.originalName}</span>
+              </div>
+              <div className="flex justify-between py-1 border-b border-slate-800/80">
+                <span className="text-slate-400">File Size:</span>
+                <span className="font-mono text-slate-300">{formatBytes(previewTarget.size)}</span>
+              </div>
+              <div className="flex justify-between py-1 border-b border-slate-800/80">
+                <span className="text-slate-400">MIME Type:</span>
+                <span className="font-mono text-slate-300">{previewTarget.mimeType}</span>
+              </div>
+              <div className="flex justify-between py-1 border-b border-slate-800/80">
+                <span className="text-slate-400">Uploaded By:</span>
+                <span className="font-semibold text-blue-400">
+                  {previewTarget.uploaderName} ({previewTarget.uploaderEmail || 'Staff'})
+                </span>
+              </div>
+              <div className="flex justify-between py-1">
+                <span className="text-slate-400">Upload Date:</span>
+                <span className="text-slate-300">{new Date(previewTarget.uploadedAt).toLocaleString()}</span>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setPreviewTarget(null)}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl"
+              >
+                Close
+              </button>
+              <a
+                href={`/api/files/${previewTarget.id}/download`}
+                download
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-xl shadow inline-flex items-center gap-1.5"
+              >
+                <span>⬇️</span>
+                <span>Download Document</span>
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* DEPARTMENT EXPLORER: DELETE CONFIRMATION MODAL                            */}
+      {/* ========================================================================= */}
+      {deleteTarget && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-sm p-6 shadow-2xl animate-in zoom-in-95 text-center">
+            <div className="w-12 h-12 rounded-full bg-red-500/10 text-red-400 border border-red-500/30 text-xl flex items-center justify-center mx-auto mb-3">
+              🗑️
+            </div>
+            <h3 className="text-base font-bold text-white">Move to Trash?</h3>
+            <p className="text-xs text-slate-400 mt-2">
+              Are you sure you want to delete <strong className="text-white">&quot;{deleteTarget.name}&quot;</strong>?
+              It can be restored later from the Trash tab.
+            </p>
+
+            <div className="mt-5 grid grid-cols-2 gap-2">
+              <button
+                onClick={() => setDeleteTarget(null)}
+                className="py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleExecuteDelete}
+                disabled={deleteLoading}
+                className="py-2.5 bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white text-xs font-bold rounded-xl transition shadow"
+              >
+                {deleteLoading ? 'Deleting...' : 'Move to Trash'}
               </button>
             </div>
           </div>
