@@ -201,6 +201,11 @@ export default function AdminDashboardPage() {
   const [folderLoading, setFolderLoading] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
+  // Department Creation State
+  const [showCreateDeptModal, setShowCreateDeptModal] = useState(false);
+  const [newDeptName, setNewDeptName] = useState('');
+  const [createDeptLoading, setCreateDeptLoading] = useState(false);
+
   // Users Management State
   const [usersList, setUsersList] = useState<UserItem[]>([]);
   const [usersLoading, setUsersLoading] = useState(false);
@@ -445,13 +450,25 @@ export default function AdminDashboardPage() {
   // Synchronize on mount
   useEffect(() => {
     const init = async () => {
+      try {
+        const checkRes = await fetch('/api/auth/me');
+        if (checkRes.ok) {
+          const authData = await checkRes.json();
+          if (!authData.authenticated) {
+            router.push('/login');
+            return;
+          }
+        }
+      } catch {
+        // Continue loading data
+      }
       await loadOverviewData();
       await loadUsers();
       await loadAdminProfile();
       await loadAuditLogs();
     };
     init();
-  }, [loadOverviewData, loadUsers, loadAdminProfile, loadAuditLogs]);
+  }, [loadOverviewData, loadUsers, loadAdminProfile, loadAuditLogs, router]);
 
   // Open Department Handler
   const handleOpenDepartment = (deptId: number) => {
@@ -484,6 +501,44 @@ export default function AdminDashboardPage() {
     }
   };
 
+  // Create Department Handler
+  const handleCreateDepartment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newDeptName.trim()) return;
+    setCreateDeptLoading(true);
+    try {
+      const res = await fetch('/api/departments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newDeptName.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        if (res.status === 401) {
+          router.push('/login');
+          return;
+        }
+        throw new Error(data.error || 'Failed to create department');
+      }
+
+      setNewDeptName('');
+      setShowCreateDeptModal(false);
+      setMessage({
+        type: 'success',
+        text: `Department "${data.department?.name || newDeptName.trim()}" created successfully.`,
+      });
+      await loadOverviewData();
+      await loadAuditLogs();
+    } catch (err: unknown) {
+      setMessage({
+        type: 'error',
+        text: err instanceof Error ? err.message : 'Error creating department',
+      });
+    } finally {
+      setCreateDeptLoading(false);
+    }
+  };
+
   // Global Create Folder Handler (Folders Tab)
   const handleCreateFolder = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -499,7 +554,13 @@ export default function AdminDashboardPage() {
         }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to create folder');
+      if (!res.ok) {
+        if (res.status === 401) {
+          router.push('/login');
+          return;
+        }
+        throw new Error(data.error || 'Failed to create folder');
+      }
 
       setNewFolderName('');
       setSelectedParentId(undefined);
@@ -528,7 +589,13 @@ export default function AdminDashboardPage() {
         }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to create folder');
+      if (!res.ok) {
+        if (res.status === 401) {
+          router.push('/login');
+          return;
+        }
+        throw new Error(data.error || 'Failed to create folder');
+      }
 
       setDeptFolderName('');
       setShowDeptFolderModal(false);
@@ -1126,6 +1193,16 @@ export default function AdminDashboardPage() {
               </button>
             )}
 
+            {activeTab === 'departments' && !selectedDeptId && (
+              <button
+                onClick={() => setShowCreateDeptModal(true)}
+                className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl shadow-lg shadow-emerald-600/30 transition flex items-center gap-1.5"
+              >
+                <span className="text-base leading-none">+</span>
+                <span>Add Department</span>
+              </button>
+            )}
+
             <button
               onClick={() => setShowCreateModal(true)}
               className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-xl shadow-lg shadow-blue-600/30 transition flex items-center gap-2"
@@ -1445,6 +1522,13 @@ export default function AdminDashboardPage() {
                         Select any department to explore its isolated folders, files, employees, and activity
                       </p>
                     </div>
+                    <button
+                      onClick={() => setShowCreateDeptModal(true)}
+                      className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-xl shadow-lg shadow-blue-600/30 transition flex items-center justify-center gap-2 shrink-0"
+                    >
+                      <span className="text-base leading-none">+</span>
+                      <span>Add Department</span>
+                    </button>
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
@@ -3754,6 +3838,65 @@ export default function AdminDashboardPage() {
           </div>
         </div>
       )}
+
+      {/* ========================================================================= */}
+      {/* CREATE DEPARTMENT MODAL                                                   */}
+      {/* ========================================================================= */}
+      {showCreateDeptModal && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md p-6 shadow-2xl animate-in zoom-in-95">
+            <div className="flex justify-between items-center pb-4 border-b border-slate-800 mb-4">
+              <div>
+                <h3 className="text-base font-bold text-white">Create New Department</h3>
+                <p className="text-xs text-slate-400">Establish a new organization operational unit</p>
+              </div>
+              <button
+                onClick={() => setShowCreateDeptModal(false)}
+                className="text-slate-400 hover:text-white text-base font-bold px-2 py-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateDepartment} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 uppercase mb-1.5">
+                  Department Name
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={newDeptName}
+                  onChange={(e) => setNewDeptName(e.target.value)}
+                  placeholder="e.g. AI Department or Artificial Intelligence"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 text-xs"
+                />
+                <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">
+                  This will create the department record, automatically provision its root folder under <strong>FAST ENGINEERING</strong>, and enable employee assignments and access control.
+                </p>
+              </div>
+
+              <div className="pt-3 border-t border-slate-800 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowCreateDeptModal(false)}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={createDeptLoading || !newDeptName.trim()}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-bold rounded-xl shadow flex items-center gap-1.5"
+                >
+                  {createDeptLoading ? 'Creating...' : '+ Create Department'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+

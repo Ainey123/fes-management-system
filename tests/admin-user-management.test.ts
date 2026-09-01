@@ -24,7 +24,7 @@ import {
 import { GET as getAdminMeHandler } from '../app/api/admin/me/route';
 import { POST as changePasswordHandler } from '../app/api/admin/change-password/route';
 import { GET as getAuditLogsHandler } from '../app/api/admin/audit-logs/route';
-import { GET as getDepartmentsHandler } from '../app/api/departments/route';
+import { GET as getDepartmentsHandler, POST as createDepartmentHandler } from '../app/api/departments/route';
 import { GET as getExplorerHandler } from '../app/api/departments/[id]/explorer/route';
 import { POST as createFolderHandler } from '../app/api/folders/route';
 import { PATCH as updateFolderHandler, DELETE as deleteFolderHandler } from '../app/api/folders/[id]/route';
@@ -869,4 +869,132 @@ test('25. Department Security: Employee cannot access unauthorized department (4
 
   assert.equal(unauthorizedRes.status, 403, 'Employee must be rejected with 403 Forbidden on other departments');
 });
+
+test('26. Unauthenticated folder creation returns 401 Unauthorized', async () => {
+  const req = new Request('http://localhost:3000/api/folders', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: 'AI Department Folder',
+    }),
+  });
+
+  const res = await createFolderHandler(req);
+  assert.equal(res.status, 401, 'Unauthenticated request must return 401');
+  const data = await res.json();
+  assert.ok(data.error, 'Error message must be present');
+});
+
+let aiDeptId = 0;
+
+test('27. Super Admin can create a new department (AI Department)', async () => {
+  const req = new Request('http://localhost:3000/api/departments', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Cookie: adminCookie,
+    },
+    body: JSON.stringify({
+      name: 'AI Department',
+    }),
+  });
+
+  const res = await createDepartmentHandler(req);
+  assert.equal(res.status, 201, 'New department must be created with 201');
+  const data = await res.json();
+  assert.equal(data.success, true);
+  assert.equal(data.department.name, 'AI Department');
+  assert.ok(data.department.id, 'Department ID returned');
+  aiDeptId = data.department.id;
+
+  // Verify it appears in GET /api/departments
+  const listRes = await getDepartmentsHandler();
+  const listData = await listRes.json();
+  const found = listData.departments.find((d: { id: number; name: string }) => d.name === 'AI Department');
+  assert.ok(found, 'AI Department must appear in departments list');
+  assert.equal(found.id, aiDeptId);
+});
+
+test('28. Duplicate department creation is rejected with 409 Conflict', async () => {
+  const req = new Request('http://localhost:3000/api/departments', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Cookie: adminCookie,
+    },
+    body: JSON.stringify({
+      name: 'AI Department',
+    }),
+  });
+
+  const res = await createDepartmentHandler(req);
+  assert.equal(res.status, 409, 'Duplicate department name must return 409 Conflict');
+});
+
+test('29. Non-admin user cannot create department (403 Forbidden)', async () => {
+  // Login as employee
+  const loginReq = new Request('http://localhost:3000/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email: 'restricted@fastengineering.com',
+      password: 'RestrictedPass2026!',
+    }),
+  });
+
+  const loginRes = await loginHandler(loginReq);
+  const empCookie = loginRes.headers.get('set-cookie') || '';
+
+  const req = new Request('http://localhost:3000/api/departments', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Cookie: empCookie,
+    },
+    body: JSON.stringify({
+      name: 'Unauthorized Department',
+    }),
+  });
+
+  const res = await createDepartmentHandler(req);
+  assert.equal(res.status, 403, 'Normal employee must be rejected with 403 Forbidden');
+});
+
+test('30. Super Admin can explore AI Department and create subfolders in it', async () => {
+  // Open explorer for AI Department
+  const explorerReq = new Request(`http://localhost:3000/api/departments/${aiDeptId}/explorer`, {
+    method: 'GET',
+    headers: { Cookie: adminCookie },
+  });
+
+  const explorerRes = await getExplorerHandler(explorerReq, {
+    params: Promise.resolve({ id: String(aiDeptId) }),
+  });
+
+  assert.equal(explorerRes.status, 200);
+  const explorerData = await explorerRes.json();
+  assert.equal(explorerData.department.name, 'AI Department');
+  assert.ok(explorerData.currentFolder, 'AI Department root folder exists');
+  const aiRootFolderId = explorerData.currentFolder.id;
+
+  // Create subfolder in AI Department
+  const folderReq = new Request('http://localhost:3000/api/folders', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Cookie: adminCookie,
+    },
+    body: JSON.stringify({
+      name: 'Deep Learning Models',
+      parentId: aiRootFolderId,
+      departmentId: aiDeptId,
+    }),
+  });
+
+  const folderRes = await createFolderHandler(folderReq);
+  assert.equal(folderRes.status, 201);
+  const folderData = await folderRes.json();
+  assert.ok(folderData.folderId, 'Folder ID returned');
+});
+
 

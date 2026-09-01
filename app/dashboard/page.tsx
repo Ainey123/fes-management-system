@@ -28,6 +28,15 @@ export default function EmployeeDashboardPage() {
 
     async function initialize() {
       try {
+        const authCheck = await fetch('/api/auth/me');
+        if (authCheck.ok) {
+          const authData = await authCheck.json();
+          if (!authData.authenticated) {
+            router.push('/login');
+            return;
+          }
+        }
+
         const [deptsRes, foldersRes] = await Promise.all([
           fetch('/api/departments'),
           fetch('/api/folders'),
@@ -57,7 +66,7 @@ export default function EmployeeDashboardPage() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [router]);
 
   const handleLogout = async () => {
     try {

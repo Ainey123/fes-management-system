@@ -1,22 +1,23 @@
 // app/api/folders/route.ts
 import { NextResponse } from 'next/server';
 import { createFolder, ensureRootFolder } from '@/src/server/folders';
-import { checkPermission } from '@/src/server/authorization';
+import { checkPermission, requireAuthUser } from '@/src/server/authorization';
 import { Permission } from '@/src/server/permissions';
 import { z } from 'zod';
-import { getSessionUserId } from '@/src/server/auth/session';
 import { db } from '@/src/server/db';
 import { folders } from '@/src/server/drizzle/schema';
 import { and, isNull, eq } from 'drizzle-orm';
+import { ensureDatabaseTables } from '@/src/server/dbInit';
 
 const CreateFolderSchema = z.object({
-  name: z.string().min(1).max(255),
-  parentId: z.number().int().positive().optional(),
-  departmentId: z.number().int().positive().optional(),
+  name: z.string().min(1, 'Folder name is required').max(255),
+  parentId: z.number().int().positive().optional().nullable(),
+  departmentId: z.number().int().positive().optional().nullable(),
 });
 
 export async function GET(request: Request) {
   try {
+    await ensureDatabaseTables();
     await ensureRootFolder();
     const { searchParams } = new URL(request.url);
     const parentIdParam = searchParams.get('parentId');
@@ -44,33 +45,69 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  // Ensure root folder exists
-  await ensureRootFolder();
-
-  const session = await getSessionUserId(request);
-  if (!session) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-  const userId = session.userId;
-
-  // Permission check for CREATE_FOLDER
-  const hasPerm = await checkPermission(userId, Permission.CREATE_FOLDER, undefined);
-  if (!hasPerm) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  }
-
-  const body = await request.json();
-  const parse = CreateFolderSchema.safeParse(body);
-  if (!parse.success) {
-    return NextResponse.json({ error: 'Invalid payload', details: parse.error.errors }, { status: 400 });
-  }
-  const { name, parentId, departmentId } = parse.data;
-
   try {
-    const folderId = await createFolder(name, parentId, userId, departmentId);
-    return NextResponse.json({ folderId }, { status: 201 });
-  } catch (e) {
-    console.error('Error creating folder', e);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    await ensureDatabaseTables();
+    await ensureRootFolder();
+
+    const authCheck = await requireAuthUser(request);
+    if (authCheck.errorResponse) return authCheck.errorResponse;
+    const auth = authCheck.auth!;
+
+    const body = await request.json();
+    const parse = CreateFolderSchema.safeParse(body);
+    if (!parse.success) {
+      return NextResponse.json(
+        { error: 'Invalid payload', details: parse.error.flatten().fieldErrors },
+        { status: 400 }
+      );
+    }
+    const { name, parentId, departmentId } = parse.data;
+
+    // Resolve department ID from parent folder if not directly specified
+    let resolvedDeptId = departmentId ?? undefined;
+    if (!resolvedDeptId && parentId) {
+      const parentRows = await db
+        .select({ departmentId: folders.departmentId })
+        .from(folders)
+        .where(eq(folders.id, parentId))
+        .limit(1)
+        .execute();
+      if (parentRows.length > 0 && parentRows[0].departmentId) {
+        resolvedDeptId = parentRows[0].departmentId;
+      }
+    }
+
+    // Permission check
+    const isSuperAdmin = auth.role === 'super_admin' || auth.role === 'admin';
+    if (!isSuperAdmin) {
+      const hasPerm = await checkPermission(auth.user.id, Permission.CREATE_FOLDER, resolvedDeptId);
+      if (!hasPerm) {
+        return NextResponse.json(
+          { error: 'Forbidden: Insufficient permissions to create folder.' },
+          { status: 403 }
+        );
+      }
+    }
+
+    const folderId = await createFolder(
+      name.trim(),
+      parentId ?? undefined,
+      auth.user.id,
+      resolvedDeptId
+    );
+
+    return NextResponse.json(
+      {
+        success: true,
+        message: `Folder "${name.trim()}" created successfully.`,
+        folderId,
+      },
+      { status: 201 }
+    );
+  } catch (e: unknown) {
+    console.error('Error creating folder:', e);
+    const message = e instanceof Error ? e.message : 'Internal server error';
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
+
