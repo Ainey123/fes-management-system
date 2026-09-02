@@ -1913,10 +1913,12 @@ export default function AdminDashboardPage() {
                                             <div className="flex items-center justify-end gap-1.5">
                                               <a
                                                 href={`/api/files/${file.id}/download`}
-                                                download
-                                                className="px-2.5 py-1 bg-blue-600/10 hover:bg-blue-600/20 text-blue-400 border border-blue-500/30 text-xs font-semibold rounded-lg transition"
+                                                download={file.originalName}
+                                                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white shadow-md shadow-blue-600/30 text-xs font-bold rounded-xl transition inline-flex items-center gap-1.5"
+                                                title={`Download ${file.originalName}`}
                                               >
-                                                Download
+                                                <span className="text-xs">⬇️</span>
+                                                <span>Download</span>
                                               </a>
                                               <button
                                                 onClick={() => setPreviewTarget(file)}
@@ -3746,11 +3748,11 @@ export default function AdminDashboardPage() {
               </button>
               <a
                 href={`/api/files/${previewTarget.id}/download`}
-                download
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-xl shadow inline-flex items-center gap-1.5"
+                download={previewTarget.originalName}
+                className="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-xl shadow-lg shadow-blue-600/30 inline-flex items-center gap-2 transition"
               >
-                <span>⬇️</span>
-                <span>Download Document</span>
+                <span className="text-base">⬇️</span>
+                <span>Download Document ({formatBytes(previewTarget.size)})</span>
               </a>
             </div>
           </div>

@@ -291,6 +291,31 @@ export default function EmployeeDashboardPage() {
     }
   };
 
+  // Export Directory as CSV
+  const handleExportDirectoryCSV = () => {
+    if (!explorerData || explorerData.files.length === 0) return;
+    const headers = ['File Name', 'Size (Bytes)', 'Size (Formatted)', 'MIME Type', 'Uploaded By', 'Uploader Email', 'Upload Date'];
+    const rows = explorerData.files.map((f) => [
+      `"${f.originalName.replace(/"/g, '""')}"`,
+      f.size,
+      `"${formatBytes(f.size)}"`,
+      `"${f.mimeType}"`,
+      `"${f.uploaderName || 'Staff'}"`,
+      `"${f.uploaderEmail || ''}"`,
+      `"${new Date(f.uploadedAt).toISOString()}"`,
+    ]);
+    const csvContent = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `${currentDeptName.replace(/\s+/g, '_')}_Files_Index.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
   // Handle Sign Out
   const handleLogout = async () => {
     try {
@@ -502,7 +527,17 @@ export default function EmployeeDashboardPage() {
                 </div>
 
                 <div className="flex items-center gap-2">
-                  <span className="text-[11px] px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold uppercase tracking-wider">
+                  {explorerData && explorerData.files.length > 0 && (
+                    <button
+                      onClick={handleExportDirectoryCSV}
+                      className="text-xs px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-semibold transition flex items-center gap-1.5 shadow-sm"
+                      title="Download full CSV report of files in this repository"
+                    >
+                      <span>📥</span>
+                      <span>Download Index (CSV)</span>
+                    </button>
+                  )}
+                  <span className="text-[11px] px-3 py-1.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold uppercase tracking-wider">
                     Permissions: VIEW • UPLOAD • DOWNLOAD
                   </span>
                 </div>
@@ -707,17 +742,20 @@ export default function EmployeeDashboardPage() {
                                   <div className="flex items-center justify-end gap-2">
                                     <button
                                       onClick={() => setPreviewTarget(file)}
-                                      className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg transition"
+                                      className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl transition flex items-center gap-1 border border-slate-700"
+                                      title="Preview file details"
                                     >
-                                      Preview
+                                      <span>👁️</span>
+                                      <span>Preview</span>
                                     </button>
 
                                     <a
                                       href={`/api/files/${file.id}/download`}
-                                      download
-                                      className="px-3 py-1.5 bg-blue-600/10 hover:bg-blue-600 text-blue-400 hover:text-white border border-blue-500/30 hover:border-transparent text-xs font-bold rounded-lg transition inline-flex items-center gap-1"
+                                      download={file.originalName}
+                                      className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white shadow-md shadow-blue-600/30 text-xs font-bold rounded-xl transition inline-flex items-center gap-1.5"
+                                      title={`Download ${file.originalName}`}
                                     >
-                                      <span>⬇️</span>
+                                      <span className="text-xs">⬇️</span>
                                       <span>Download</span>
                                     </a>
                                   </div>
@@ -938,17 +976,17 @@ export default function EmployeeDashboardPage() {
             <div className="flex justify-end gap-2">
               <button
                 onClick={() => setPreviewTarget(null)}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl"
+                className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl transition"
               >
                 Close
               </button>
               <a
                 href={`/api/files/${previewTarget.id}/download`}
-                download
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-xl shadow inline-flex items-center gap-1.5"
+                download={previewTarget.originalName}
+                className="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-xl shadow-lg shadow-blue-600/30 inline-flex items-center gap-2 transition"
               >
-                <span>⬇️</span>
-                <span>Download Document</span>
+                <span className="text-base">⬇️</span>
+                <span>Download Document ({formatBytes(previewTarget.size)})</span>
               </a>
             </div>
           </div>

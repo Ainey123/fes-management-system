@@ -75,12 +75,16 @@ export async function GET(
     });
 
     const uint8 = new Uint8Array(buffer);
+    const safeFilename = fileRecord.originalName.replace(/["\r\n]/g, '_');
+    const encodedFilename = encodeURIComponent(fileRecord.originalName);
+
     return new NextResponse(uint8, {
       status: 200,
       headers: {
         'Content-Type': fileRecord.mimeType || 'application/octet-stream',
-        'Content-Disposition': `attachment; filename="${encodeURIComponent(fileRecord.originalName)}"`,
+        'Content-Disposition': `attachment; filename="${safeFilename}"; filename*=UTF-8''${encodedFilename}`,
         'Content-Length': String(uint8.byteLength),
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
       },
     });
   } catch (error: unknown) {
