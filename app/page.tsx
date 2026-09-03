@@ -1,4 +1,5 @@
 import Link from "next/link";
+import InstallAppButton from "@/src/components/InstallAppButton";
 
 const departmentsList = [
   { name: "Engineering Department", desc: "Technical documents, specifications, and project schematics", icon: "📐" },
@@ -28,6 +29,7 @@ export default function Home() {
             </div>
           </div>
           <div className="flex items-center gap-3">
+            <InstallAppButton variant="navbar" />
             <Link
               href="/setup"
               className="text-xs sm:text-sm font-medium text-slate-300 hover:text-white px-3 py-2 rounded-md transition"

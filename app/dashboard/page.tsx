@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import InstallAppButton from '@/src/components/InstallAppButton';
 
 interface Department {
   id: number;
@@ -366,6 +367,8 @@ export default function EmployeeDashboardPage() {
                 </div>
               </div>
             )}
+
+            <InstallAppButton variant="navbar" />
 
             {(currentUser?.role === 'super_admin' || currentUser?.role === 'admin') && (
               <Link

@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import InstallAppButton from '@/src/components/InstallAppButton';
 
 interface Department {
   id: number;
@@ -1179,6 +1180,8 @@ export default function AdminDashboardPage() {
           </div>
 
           <div className="flex items-center gap-3">
+            <InstallAppButton variant="navbar" />
+
             {activeTab === 'departments' && selectedDeptId && (
               <button
                 onClick={() => {

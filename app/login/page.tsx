@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import InstallAppButton from '@/src/components/InstallAppButton';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -115,7 +116,8 @@ export default function LoginPage() {
             </button>
           </form>
 
-          <div className="mt-6 pt-6 border-t border-slate-700/60 text-center">
+          <div className="mt-6 pt-6 border-t border-slate-700/60 flex flex-col items-center gap-3">
+            <InstallAppButton variant="secondary" className="w-full justify-center py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold rounded-xl flex items-center gap-2 transition cursor-pointer" />
             <p className="text-xs text-slate-400">
               First time setup?{' '}
               <Link href="/setup" className="font-semibold text-blue-400 hover:text-blue-300">
