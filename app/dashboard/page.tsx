@@ -46,6 +46,7 @@ interface ExplorerData {
   breadcrumbs: Array<{ id: number | null; name: string }>;
   folders: ExplorerFolder[];
   files: ExplorerFile[];
+  userPermissions?: string[];
   statistics: {
     foldersCount: number;
     filesCount: number;
@@ -332,6 +333,11 @@ export default function EmployeeDashboardPage() {
     departments.find((d) => d.id === selectedDeptId)?.name ||
     'Department Repository';
 
+  const isSuperAdmin = currentUser?.role === 'super_admin' || currentUser?.role === 'admin';
+  const userPermissions = explorerData?.userPermissions || [];
+  const canCreateFolder = isSuperAdmin || userPermissions.includes('CREATE_FOLDER');
+  const canUpload = isSuperAdmin || userPermissions.includes('UPLOAD');
+
   return (
     <div className="min-h-screen flex flex-col bg-slate-950 text-slate-100 font-sans">
       {/* ========================================================================= */}
@@ -489,25 +495,29 @@ export default function EmployeeDashboardPage() {
               <span>Explorer</span>
             </button>
 
-            <button
-              onClick={() => setShowFolderModal(true)}
-              className="px-4 py-2.5 rounded-xl text-xs font-bold bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white transition flex items-center gap-1.5"
-            >
-              <span>📁</span>
-              <span>+ New Folder</span>
-            </button>
+            {canCreateFolder && (
+              <button
+                onClick={() => setShowFolderModal(true)}
+                className="px-4 py-2.5 rounded-xl text-xs font-bold bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white transition flex items-center gap-1.5 shadow-sm"
+              >
+                <span>📁</span>
+                <span>+ New Folder</span>
+              </button>
+            )}
 
-            <button
-              onClick={() => setActiveTab('upload')}
-              className={`px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
-                activeTab === 'upload'
-                  ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/30'
-                  : 'bg-slate-900 border border-slate-800 text-slate-300 hover:bg-slate-800'
-              }`}
-            >
-              <span>⬆️</span>
-              <span>Upload Document</span>
-            </button>
+            {canUpload && (
+              <button
+                onClick={() => setActiveTab('upload')}
+                className={`px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+                  activeTab === 'upload'
+                    ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/30'
+                    : 'bg-slate-900 border border-slate-800 text-slate-300 hover:bg-slate-800'
+                }`}
+              >
+                <span>⬆️</span>
+                <span>Upload Document</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -541,7 +551,7 @@ export default function EmployeeDashboardPage() {
                     </button>
                   )}
                   <span className="text-[11px] px-3 py-1.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold uppercase tracking-wider">
-                    Permissions: VIEW • UPLOAD • DOWNLOAD
+                    Permissions: {isSuperAdmin ? 'ALL (SUPER ADMIN)' : (userPermissions.length > 0 ? userPermissions.join(' • ') : 'VIEW ONLY')}
                   </span>
                 </div>
               </div>

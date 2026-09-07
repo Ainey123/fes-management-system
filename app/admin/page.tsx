@@ -162,7 +162,7 @@ const PERMISSION_GROUPS = [
     category: 'Folders',
     description: 'Directory structure and movement permissions',
     permissions: [
-      { id: 'CREATE_FOLDER', label: 'Create Folder', desc: 'Can create subfolders within department' },
+      { id: 'CREATE_FOLDER', label: 'Create Folder', desc: 'Allows this employee to create folders inside departments they are authorized to access.' },
       { id: 'MOVE', label: 'Move', desc: 'Can relocate documents and folders' },
     ],
   },

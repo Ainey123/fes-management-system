@@ -1,11 +1,12 @@
 // app/api/departments/[id]/explorer/route.ts
 import { NextResponse } from 'next/server';
 import { db } from '@/src/server/db';
-import { departments, folders, files, users, auditLogs } from '@/src/server/drizzle/schema';
+import { departments, folders, files, users, auditLogs, userDepartmentAccess, permissions } from '@/src/server/drizzle/schema';
 import { eq, and, isNull, inArray, desc, ilike } from 'drizzle-orm';
 import { requireAuthUser } from '@/src/server/authorization';
 import { ensureRootFolder } from '@/src/server/folders';
 import { ensureDatabaseTables } from '@/src/server/dbInit';
+import { allPermissions } from '@/src/server/permissions';
 
 interface RawFileRow {
   id: number;
@@ -236,6 +237,25 @@ export async function GET(
       .limit(10)
       .execute();
 
+    // User permissions for this department
+    let userPermissions: string[] = [];
+    if (isSuperAdmin) {
+      userPermissions = allPermissions;
+    } else {
+      const accessRows = await db
+        .select({ permissionName: permissions.name })
+        .from(userDepartmentAccess)
+        .leftJoin(permissions, eq(userDepartmentAccess.permissionId, permissions.id))
+        .where(
+          and(
+            eq(userDepartmentAccess.userId, auth.user.id),
+            eq(userDepartmentAccess.departmentId, deptId)
+          )
+        )
+        .execute();
+      userPermissions = accessRows.map((a) => a.permissionName).filter(Boolean) as string[];
+    }
+
     return NextResponse.json({
       department: {
         id: department.id,
@@ -254,6 +274,7 @@ export async function GET(
         createdAt: f.createdAt.toISOString(),
       })),
       files: enhancedFiles,
+      userPermissions,
       statistics: {
         foldersCount: deptFolders.length,
         filesCount: totalDeptFilesCount,

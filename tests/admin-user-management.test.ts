@@ -997,4 +997,314 @@ test('30. Super Admin can explore AI Department and create subfolders in it', as
   assert.ok(folderData.folderId, 'Folder ID returned');
 });
 
+let aiEmpCookie = '';
+let aiEmpFolderId = 0;
+let aiRootFolderIdGlobal = 0;
+let engineeringRootFolderIdGlobal = 0;
+
+test('31. RBAC TEST 1: Employee with CREATE_FOLDER creates folder in own department -> 201 Success', async () => {
+  // 1. Create employee in AI Department with CREATE_FOLDER permission
+  const createEmpReq = new Request('http://localhost:3000/api/admin/users', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Cookie: adminCookie,
+    },
+    body: JSON.stringify({
+      name: 'AI Lead Engineer',
+      email: 'ai.lead@fastengineering.com',
+      departmentId: aiDeptId,
+      role: 'employee',
+      password: 'AiLeadPassword2026!',
+      permissions: ['VIEW', 'UPLOAD', 'DOWNLOAD', 'CREATE_FOLDER'],
+    }),
+  });
+
+  const createEmpRes = await createUserHandler(createEmpReq);
+  assert.equal(createEmpRes.status, 201);
+
+  // 2. Login as AI Lead Engineer
+  const loginReq = new Request('http://localhost:3000/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email: 'ai.lead@fastengineering.com',
+      password: 'AiLeadPassword2026!',
+    }),
+  });
+
+  const loginRes = await loginHandler(loginReq);
+  assert.equal(loginRes.status, 200);
+  aiEmpCookie = loginRes.headers.get('set-cookie') || '';
+
+  // 3. Get AI Department explorer root folder & user permissions
+  const explorerReq = new Request(`http://localhost:3000/api/departments/${aiDeptId}/explorer`, {
+    method: 'GET',
+    headers: { Cookie: aiEmpCookie },
+  });
+
+  const explorerRes = await getExplorerHandler(explorerReq, {
+    params: Promise.resolve({ id: String(aiDeptId) }),
+  });
+
+  assert.equal(explorerRes.status, 200);
+  const explorerData = await explorerRes.json();
+  assert.ok(explorerData.userPermissions.includes('CREATE_FOLDER'), 'User permissions include CREATE_FOLDER');
+  aiRootFolderIdGlobal = explorerData.currentFolder.id;
+
+  // 4. Create folder inside AI Department
+  const folderReq = new Request('http://localhost:3000/api/folders', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Cookie: aiEmpCookie,
+    },
+    body: JSON.stringify({
+      name: 'AI Employee Folder',
+      parentId: aiRootFolderIdGlobal,
+      departmentId: aiDeptId,
+    }),
+  });
+
+  const folderRes = await createFolderHandler(folderReq);
+  assert.equal(folderRes.status, 201, 'Employee with CREATE_FOLDER must successfully create folder');
+  const folderData = await folderRes.json();
+  assert.ok(folderData.folderId, 'Folder ID returned');
+  aiEmpFolderId = folderData.folderId;
+});
+
+test('32. RBAC TEST 2: Employee without CREATE_FOLDER tries to create folder -> 403 Forbidden', async () => {
+  // 1. Create employee in AI Department without CREATE_FOLDER permission
+  const createEmpReq = new Request('http://localhost:3000/api/admin/users', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Cookie: adminCookie,
+    },
+    body: JSON.stringify({
+      name: 'AI View-Only Intern',
+      email: 'ai.intern@fastengineering.com',
+      departmentId: aiDeptId,
+      role: 'employee',
+      password: 'AiInternPassword2026!',
+      permissions: ['VIEW', 'UPLOAD'],
+    }),
+  });
+
+  const createEmpRes = await createUserHandler(createEmpReq);
+  assert.equal(createEmpRes.status, 201);
+
+  // 2. Login as AI Intern
+  const loginReq = new Request('http://localhost:3000/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email: 'ai.intern@fastengineering.com',
+      password: 'AiInternPassword2026!',
+    }),
+  });
+
+  const loginRes = await loginHandler(loginReq);
+  assert.equal(loginRes.status, 200);
+  const internCookie = loginRes.headers.get('set-cookie') || '';
+
+  // 3. Attempt to create folder
+  const folderReq = new Request('http://localhost:3000/api/folders', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Cookie: internCookie,
+    },
+    body: JSON.stringify({
+      name: 'Unauthorized Intern Folder',
+      parentId: aiRootFolderIdGlobal,
+      departmentId: aiDeptId,
+    }),
+  });
+
+  const folderRes = await createFolderHandler(folderReq);
+  assert.equal(folderRes.status, 403, 'Employee without CREATE_FOLDER must receive 403 Forbidden');
+  const folderData = await folderRes.json();
+  assert.ok(folderData.error.includes('Permission denied') || folderData.error.includes('CREATE_FOLDER'));
+});
+
+test('33. RBAC TEST 3: Employee tries to create folder in another department by changing departmentId -> 403 Forbidden', async () => {
+  // AI Lead tries to create folder in Engineering Department
+  const folderReq = new Request('http://localhost:3000/api/folders', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Cookie: aiEmpCookie,
+    },
+    body: JSON.stringify({
+      name: 'Tampered Engineering Folder',
+      parentId: aiRootFolderIdGlobal,
+      departmentId: engineeringDeptId,
+    }),
+  });
+
+  const folderRes = await createFolderHandler(folderReq);
+  assert.equal(folderRes.status, 403, 'Employee attempting to create folder in unassigned department must get 403');
+  const folderData = await folderRes.json();
+  assert.ok(folderData.error);
+});
+
+test('34. RBAC TEST 4: Employee tries to use another department parentFolderId -> 403 Forbidden', async () => {
+  // Get Engineering root folder id
+  const engExpReq = new Request(`http://localhost:3000/api/departments/${engineeringDeptId}/explorer`, {
+    method: 'GET',
+    headers: { Cookie: adminCookie },
+  });
+  const engExpRes = await getExplorerHandler(engExpReq, {
+    params: Promise.resolve({ id: String(engineeringDeptId) }),
+  });
+  const engExpData = await engExpRes.json();
+  engineeringRootFolderIdGlobal = engExpData.currentFolder.id;
+
+  // AI Lead tries to use Engineering's parent folder with departmentId = aiDeptId
+  const folderReq = new Request('http://localhost:3000/api/folders', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Cookie: aiEmpCookie,
+    },
+    body: JSON.stringify({
+      name: 'Cross Department Injected Folder',
+      parentId: engineeringRootFolderIdGlobal,
+      departmentId: aiDeptId,
+    }),
+  });
+
+  const folderRes = await createFolderHandler(folderReq);
+  assert.equal(folderRes.status, 403, 'Employee referencing parent folder from another department must get 403');
+  const folderData = await folderRes.json();
+  assert.ok(folderData.error);
+});
+
+test('35. RBAC TEST 5: Employee creates nested subfolder (multi-level deep) inside their own folder -> 201 Success', async () => {
+  // Level 2: Subfolder A inside aiEmpFolderId
+  const subfolderAReq = new Request('http://localhost:3000/api/folders', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Cookie: aiEmpCookie,
+    },
+    body: JSON.stringify({
+      name: 'Subfolder A',
+      parentId: aiEmpFolderId,
+      departmentId: aiDeptId,
+    }),
+  });
+
+  const subfolderARes = await createFolderHandler(subfolderAReq);
+  assert.equal(subfolderARes.status, 201, 'Level 2 subfolder creation should succeed');
+  const subfolderAData = await subfolderARes.json();
+  assert.ok(subfolderAData.folderId);
+  const subfolderAId = subfolderAData.folderId;
+
+  // Level 3: Subfolder B inside Subfolder A
+  const subfolderBReq = new Request('http://localhost:3000/api/folders', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Cookie: aiEmpCookie,
+    },
+    body: JSON.stringify({
+      name: 'Subfolder B',
+      parentId: subfolderAId,
+      departmentId: aiDeptId,
+    }),
+  });
+
+  const subfolderBRes = await createFolderHandler(subfolderBReq);
+  assert.equal(subfolderBRes.status, 201, 'Level 3 nested subfolder creation should succeed');
+  const subfolderBData = await subfolderBRes.json();
+  assert.ok(subfolderBData.folderId);
+});
+
+test('36. RBAC TEST 6: Admin creates folder anywhere across departments -> 201 Success', async () => {
+  const folderReq = new Request('http://localhost:3000/api/folders', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Cookie: adminCookie,
+    },
+    body: JSON.stringify({
+      name: 'Super Admin Strategy Archive',
+      parentId: aiRootFolderIdGlobal,
+      departmentId: aiDeptId,
+    }),
+  });
+
+  const folderRes = await createFolderHandler(folderReq);
+  assert.equal(folderRes.status, 201, 'Admin can create folders across any department');
+  const folderData = await folderRes.json();
+  assert.ok(folderData.folderId);
+});
+
+test('37. RBAC TEST 7: Department isolation & audit logging verification', async () => {
+  // 1. Verify Accounts department employee cannot access AI Department
+  const createAccEmpReq = new Request('http://localhost:3000/api/admin/users', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Cookie: adminCookie,
+    },
+    body: JSON.stringify({
+      name: 'Accounts Auditor',
+      email: 'acc.auditor@fastengineering.com',
+      departmentId: accountsDeptId,
+      role: 'employee',
+      password: 'AccAuditorPass2026!',
+      permissions: ['VIEW', 'CREATE_FOLDER'],
+    }),
+  });
+
+  const createAccEmpRes = await createUserHandler(createAccEmpReq);
+  assert.equal(createAccEmpRes.status, 201);
+
+  const accLoginReq = new Request('http://localhost:3000/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email: 'acc.auditor@fastengineering.com',
+      password: 'AccAuditorPass2026!',
+    }),
+  });
+
+  const accLoginRes = await loginHandler(accLoginReq);
+  assert.equal(accLoginRes.status, 200);
+  const accCookie = accLoginRes.headers.get('set-cookie') || '';
+
+  // Attempt to access AI Department
+  const accessAiReq = new Request(`http://localhost:3000/api/departments/${aiDeptId}/explorer`, {
+    method: 'GET',
+    headers: { Cookie: accCookie },
+  });
+
+  const accessAiRes = await getExplorerHandler(accessAiReq, {
+    params: Promise.resolve({ id: String(aiDeptId) }),
+  });
+  assert.equal(accessAiRes.status, 403, 'Accounts employee cannot view AI department contents');
+
+  // 2. Verify Audit Logs for CREATE_FOLDER action
+  const auditReq = new Request('http://localhost:3000/api/admin/audit-logs?limit=50', {
+    method: 'GET',
+    headers: { Cookie: adminCookie },
+  });
+
+  const auditRes = await getAuditLogsHandler(auditReq);
+  assert.equal(auditRes.status, 200);
+  const auditData = await auditRes.json();
+  const folderLogs = auditData.logs.filter((l: { action: string }) => l.action === 'CREATE_FOLDER');
+  assert.ok(folderLogs.length > 0, 'CREATE_FOLDER audit logs recorded');
+
+  // Verify details in audit log
+  const empFolderLog = folderLogs.find((l: { details: { folderName?: string } }) => l.details?.folderName === 'AI Employee Folder');
+  assert.ok(empFolderLog, 'Audit log for AI Employee Folder creation found');
+  assert.equal(empFolderLog.entity, 'folder');
+  assert.ok(empFolderLog.details.departmentId, 'Department ID in log details');
+});
+
+
 
