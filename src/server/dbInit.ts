@@ -159,6 +159,26 @@ export async function ensureDatabaseTables() {
       await pool.query(`INSERT INTO "permissions" ("name") VALUES ($1) ON CONFLICT ("name") DO NOTHING`, [perm]);
     }
 
+    // Auto-grant standard permissions (VIEW, UPLOAD, DOWNLOAD, CREATE_FOLDER)
+    // to all existing department users who do not have these mappings yet
+    try {
+      await pool.query(`
+        INSERT INTO "user_department_access" ("user_id", "department_id", "permission_id")
+        SELECT u.id, u.department_id, p.id
+        FROM users u
+        CROSS JOIN permissions p
+        WHERE u.department_id IS NOT NULL
+          AND u.deleted_at IS NULL
+          AND p.name IN ('VIEW', 'UPLOAD', 'DOWNLOAD', 'CREATE_FOLDER')
+          AND NOT EXISTS (
+            SELECT 1 FROM user_department_access uda
+            WHERE uda.user_id = u.id AND uda.department_id = u.department_id AND uda.permission_id = p.id
+          );
+      `);
+    } catch {
+      // Ignore if table not yet populated
+    }
+
     initialized = true;
   } catch (error) {
     console.error('Error auto-initializing database tables:', error);

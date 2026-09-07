@@ -10,17 +10,17 @@ import { NextResponse } from 'next/server';
  * For department employees, permissions are looked up in `user_department_access` linking users, departments, and permissions.
  */
 export async function checkPermission(userId: string, permission: Permission, departmentId?: number): Promise<boolean> {
-  // Fetch user with role
+  // Fetch user with role and department
   const userRows = await db
-    .select({ roleId: users.roleId })
+    .select({ roleId: users.roleId, departmentId: users.departmentId })
     .from(users)
     .where(eq(users.id, userId))
     .limit(1)
     .execute();
   if (userRows.length === 0) return false;
-  const roleId = userRows[0].roleId;
+  const { roleId, departmentId: userDeptId } = userRows[0];
 
-  // SUPER_ADMIN (assuming role with name 'super_admin')
+  // SUPER_ADMIN role has all permissions everywhere
   if (roleId) {
     const roleRows = await db
       .select({ name: roles.name })
@@ -28,13 +28,18 @@ export async function checkPermission(userId: string, permission: Permission, de
       .where(eq(roles.id, roleId))
       .limit(1)
       .execute();
-    if (roleRows.length && roleRows[0].name === 'super_admin') {
+    if (roleRows.length && (roleRows[0].name === 'super_admin' || roleRows[0].name === 'admin')) {
       return true;
     }
   }
 
   // If departmentId not provided, deny (except super admin handled above)
   if (!departmentId) return false;
+
+  // Department Isolation: user must be assigned to this department
+  if (userDeptId && userDeptId !== departmentId) {
+    return false;
+  }
 
   // Check permission mapping
   const permRows = await db
@@ -59,7 +64,37 @@ export async function checkPermission(userId: string, permission: Permission, de
     .limit(1)
     .execute();
 
-  return accessRows.length > 0;
+  if (accessRows.length > 0) {
+    return true;
+  }
+
+  // If user is assigned to this department, check if any explicit access records exist
+  if (userDeptId === departmentId) {
+    const anyAccessForUserDept = await db
+      .select({ id: userDepartmentAccess.id })
+      .from(userDepartmentAccess)
+      .where(
+        and(
+          eq(userDepartmentAccess.userId, userId),
+          eq(userDepartmentAccess.departmentId, departmentId)
+        )
+      )
+      .limit(1)
+      .execute();
+
+    // If no explicit records configured yet, default standard employee permissions apply
+    if (anyAccessForUserDept.length === 0) {
+      const defaultStandardPerms: Permission[] = [
+        Permission.VIEW,
+        Permission.UPLOAD,
+        Permission.DOWNLOAD,
+        Permission.CREATE_FOLDER,
+      ];
+      return defaultStandardPerms.includes(permission);
+    }
+  }
+
+  return false;
 }
 
 export interface AuthenticatedUser {

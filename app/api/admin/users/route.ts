@@ -259,12 +259,16 @@ export async function POST(request: Request) {
     const createdUser = insertedUser[0];
 
     // Assign permissions in user_department_access
-    if (data.permissions && data.permissions.length > 0) {
+    const targetPerms = data.permissions && data.permissions.length > 0
+      ? data.permissions
+      : ['VIEW', 'UPLOAD', 'DOWNLOAD', 'CREATE_FOLDER'];
+
+    if (targetPerms.length > 0) {
       const allPermRows = await db.select().from(permissions).execute();
       const permMap = new Map(allPermRows.map((p) => [p.name, p.id]));
 
       const accessInserts: { userId: string; departmentId: number; permissionId: number }[] = [];
-      for (const permName of data.permissions) {
+      for (const permName of targetPerms) {
         let permId = permMap.get(permName);
         if (!permId) {
           const newPerm = await db

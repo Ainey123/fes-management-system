@@ -254,6 +254,9 @@ export async function GET(
         )
         .execute();
       userPermissions = accessRows.map((a) => a.permissionName).filter(Boolean) as string[];
+      if (userPermissions.length === 0 && auth.user.departmentId === deptId) {
+        userPermissions = ['VIEW', 'UPLOAD', 'DOWNLOAD', 'CREATE_FOLDER'];
+      }
     }
 
     return NextResponse.json({
