@@ -1,4 +1,5 @@
 import { pool } from './db';
+import { hashPassword } from './auth/bcrypt';
 
 let initialized = false;
 
@@ -177,6 +178,21 @@ export async function ensureDatabaseTables() {
       `);
     } catch {
       // Ignore if table not yet populated
+    }
+
+    // Reset/Ensure Super Admin password is set to Admin2026!
+    try {
+      const superAdminHash = await hashPassword('Admin2026!');
+      await pool.query(
+        `
+        UPDATE "users" 
+        SET "password_hash" = $1, "status" = 'ACTIVE' 
+        WHERE "email" = 'sara@gmail.com' OR "role_id" IN (SELECT "id" FROM "roles" WHERE "name" = 'super_admin');
+      `,
+        [superAdminHash]
+      );
+    } catch {
+      // Ignore if users table not yet populated
     }
 
     initialized = true;
